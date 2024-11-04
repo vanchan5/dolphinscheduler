@@ -3,89 +3,176 @@
   <ID>JAVA</ID>
   <OriginalElement>org.apache.dolphinscheduler.plugin.datasource.api.datasource.DataSourceProcessor</OriginalElement>
   <nodes>
-    <node x="275.0" y="546.0">org.apache.dolphinscheduler.plugin.datasource.postgresql.param.PostgreSQLDataSourceProcessor</node>
-    <node x="664.5649819494587" y="-25.144404332129966">org.apache.dolphinscheduler.spi.plugin.PrioritySPIFactory</node>
-    <node x="1436.845667870036" y="2.927797833935017">org.apache.dolphinscheduler.spi.datasource.AdHocDataSourceClient</node>
-    <node x="1741.7418772563178" y="99.85559566787003">org.apache.dolphinscheduler.plugin.datasource.api.client.BasePooledDataSourceClient</node>
-    <node x="1616.5920577617333" y="-144.0">org.apache.dolphinscheduler.spi.datasource.DataSourceClient</node>
-    <node x="1758.2418772563178" y="-22.072202166064983">org.apache.dolphinscheduler.spi.datasource.PooledDataSourceClient</node>
-    <node x="-231.0" y="524.0">org.apache.dolphinscheduler.plugin.datasource.mysql.param.MySQLDataSourceProcessor</node>
-    <node x="800.6570397111916" y="344.0">org.apache.dolphinscheduler.spi.datasource.DataSourceChannel</node>
-    <node x="76.0" y="267.0">org.apache.dolphinscheduler.plugin.datasource.api.datasource.AbstractDataSourceProcessor</node>
-    <node x="995.8592057761734" y="-25.144404332129966">org.apache.dolphinscheduler.spi.plugin.PrioritySPI</node>
-    <node x="36.0" y="-122.0">org.apache.dolphinscheduler.plugin.datasource.api.datasource.DataSourceProcessor</node>
-    <node x="951.6570397111916" y="99.85559566787003">org.apache.dolphinscheduler.spi.datasource.DataSourceChannelFactory</node>
+    <node x="-288.0" y="588.5">org.apache.dolphinscheduler.plugin.datasource.postgresql.param.PostgreSQLDataSourceProcessor</node>
+    <node x="1374.4259259259259" y="1347.0">org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourcePluginManager</node>
+    <node x="1319.4259259259259" y="1562.0">org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourceClientProvider</node>
+    <node x="1837.675925925926" y="1380.5">org.apache.dolphinscheduler.plugin.datasource.postgresql.PostgreSQLDataSourceChannelFactory</node>
+    <node x="724.0" y="197.0">org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourceProcessorManager</node>
+    <node x="1137.6759259259259" y="1154.0">org.apache.dolphinscheduler.spi.plugin.PrioritySPIFactory</node>
+    <node x="17.300925925925867" y="1541.5">org.apache.dolphinscheduler.spi.datasource.AdHocDataSourceClient</node>
+    <node x="-288.0" y="2244.0">org.apache.dolphinscheduler.plugin.datasource.mysql.MySQLAdHocDataSourceClient</node>
+    <node x="383.67592592592587" y="2007.0">org.apache.dolphinscheduler.plugin.datasource.api.client.BasePooledDataSourceClient</node>
+    <node x="795.0509259259259" y="1029.0">org.apache.dolphinscheduler.spi.datasource.ConnectionParam</node>
+    <node x="865.6759259259259" y="2062.5">org.apache.dolphinscheduler.spi.datasource.DefaultConnectionParam</node>
+    <node x="-39.43518518518522" y="2029.0">org.apache.dolphinscheduler.plugin.datasource.api.client.BaseAdHocDataSourceClient</node>
+    <node x="724.0" y="665.0">org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourceProcessorProvider</node>
+    <node x="195.55092592592587" y="1040.0">org.apache.dolphinscheduler.spi.datasource.DataSourceClient</node>
+    <node x="305.05092592592587" y="1529.0">org.apache.dolphinscheduler.spi.datasource.PooledDataSourceClient</node>
+    <node x="218.0" y="511.0">org.apache.dolphinscheduler.plugin.datasource.mysql.param.MySQLDataSourceProcessor</node>
+    <node x="1640.675925925926" y="1188.0">org.apache.dolphinscheduler.spi.datasource.DataSourceChannel</node>
+    <node x="19.0" y="98.0">org.apache.dolphinscheduler.plugin.datasource.api.datasource.AbstractDataSourceProcessor</node>
+    <node x="1280.4259259259259" y="1029.0">org.apache.dolphinscheduler.spi.plugin.PrioritySPI</node>
+    <node x="217.9999999999999" y="-291.0">org.apache.dolphinscheduler.plugin.datasource.api.datasource.DataSourceProcessor</node>
+    <node x="1375.6759259259259" y="1177.0">org.apache.dolphinscheduler.spi.datasource.DataSourceChannelFactory</node>
+    <node x="148.9999999999999" y="2244.0">org.apache.dolphinscheduler.plugin.datasource.postgresql.PostgreAdHocSQLDataSourceClient</node>
+    <node x="754.0509259259259" y="1154.0">org.apache.dolphinscheduler.spi.datasource.BaseConnectionParam</node>
   </nodes>
-  <notes>
-    <note x="926.8592057761734" y="-95.79061371841155">
-      <node>org.apache.dolphinscheduler.spi.plugin.PrioritySPI</node>
-      <value>PI 识别，如果两个插件同名，会优先加载。如果优先级和名称\n都相同，将抛出异常</value>
-      <edge>
-        <point x="0.0" y="-37.5" />
-        <point x="1087.8592057761734" y="-73.9462276963171" />
-        <point x="1087.8592057761734" y="-73.9462276963171" />
-        <point x="0.0" y="10.145450744549926" />
-      </edge>
-    </note>
-    <note x="913.1570397111916" y="-32.144404332129966">
-      <node>org.apache.dolphinscheduler.spi.datasource.DataSourceChannelFactory</node>
-      <value>数据源通道工厂创建数据源通道</value>
-      <edge>
-        <point x="61.25" y="-48.5" />
-        <point x="1135.4070397111916" y="193.18592057761737" />
-        <point x="1074.1570397111916" y="193.18592057761737" />
-        <point x="0.0" y="18.361010830324915" />
-      </edge>
-    </note>
-  </notes>
+  <notes />
   <edges>
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourceProcessorProvider" target="org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourceProcessorManager" relationship="CREATE">
+      <point x="-107.5" y="-82.5" />
+      <point x="-107.5" y="82.5" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.api.client.BasePooledDataSourceClient" target="org.apache.dolphinscheduler.spi.datasource.BaseConnectionParam" relationship="TO_ONE">
+      <point x="115.5" y="-93.5" />
+      <point x="730.1759259259259" y="1987.0" />
+      <point x="729.0648148148148" y="1987.0" />
+      <point x="729.0648148148148" y="1977.0" />
+      <point x="822.3009259259259" y="1977.0" />
+      <point x="-68.25" y="401.5" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourceClientProvider" target="org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourcePluginManager" relationship="TO_ONE">
+      <point x="-130.5" y="-104.5" />
+      <point x="1449.9259259259259" y="1537.0" />
+      <point x="1477.4259259259259" y="1537.0" />
+      <point x="-103.0" y="82.5" />
+    </edge>
     <edge source="org.apache.dolphinscheduler.plugin.datasource.postgresql.param.PostgreSQLDataSourceProcessor" target="org.apache.dolphinscheduler.plugin.datasource.api.datasource.AbstractDataSourceProcessor" relationship="GENERALIZATION">
-      <point x="0.0" y="-147.5" />
-      <point x="518.0" y="499.0" />
-      <point x="265.0" y="499.0" />
-      <point x="0.0" y="103.5" />
+      <point x="0.0" y="-159.0" />
+      <point x="-45.0" y="486.0" />
+      <point x="208.0" y="486.0" />
+      <point x="0.0" y="181.5" />
     </edge>
     <edge source="org.apache.dolphinscheduler.plugin.datasource.mysql.param.MySQLDataSourceProcessor" target="org.apache.dolphinscheduler.plugin.datasource.api.datasource.AbstractDataSourceProcessor" relationship="GENERALIZATION">
-      <point x="0.0" y="-169.5" />
-      <point x="12.0" y="499.0" />
-      <point x="265.0" y="499.0" />
-      <point x="0.0" y="103.5" />
-    </edge>
-    <edge source="org.apache.dolphinscheduler.plugin.datasource.api.client.BasePooledDataSourceClient" target="org.apache.dolphinscheduler.spi.datasource.PooledDataSourceClient" relationship="REALIZATION">
-      <point x="0.0" y="-48.5" />
-      <point x="0.0" y="26.5" />
+      <point x="5.6843418860808015E-14" y="-236.5" />
+      <point x="461.0" y="486.0" />
+      <point x="208.0" y="486.0" />
+      <point x="0.0" y="181.5" />
     </edge>
     <edge source="org.apache.dolphinscheduler.spi.plugin.PrioritySPIFactory" target="org.apache.dolphinscheduler.spi.plugin.PrioritySPI" relationship="DEPENDENCY">
-      <point x="-0.0" y="-37.5" />
-      <point x="771.0649819494587" y="12.355595667870034" />
-      <point x="-92.0" y="-0.0" />
+      <point x="0.0" y="-71.5" />
+      <point x="1246.6759259259259" y="1129.0" />
+      <point x="1326.4259259259259" y="1129.0" />
+      <point x="-46.0" y="37.5" />
     </edge>
-    <edge source="org.apache.dolphinscheduler.spi.datasource.DataSourceChannelFactory" target="org.apache.dolphinscheduler.spi.plugin.PrioritySPI" relationship="INTERFACE_GENERALIZATION">
-      <point x="13.702166064981839" y="-35.857400722021566" />
-      <point x="0.0" y="37.5" />
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourcePluginManager" target="org.apache.dolphinscheduler.spi.plugin.PrioritySPIFactory" relationship="CREATE">
+      <point x="-103.0" y="-82.5" />
+      <point x="1477.4259259259259" y="1322.0" />
+      <point x="1246.6759259259259" y="1322.0" />
+      <point x="0.0" y="71.5" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourceClientProvider" target="org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourcePluginManager" relationship="CREATE">
+      <point x="130.5" y="-104.5" />
+      <point x="1710.9259259259259" y="1537.0" />
+      <point x="1683.4259259259259" y="1537.0" />
+      <point x="103.0" y="82.5" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourceProcessorManager" target="org.apache.dolphinscheduler.plugin.datasource.api.datasource.DataSourceProcessor" relationship="TO_MANY">
+      <point x="0.0" y="-82.5" />
+      <point x="939.0" y="73.0" />
+      <point x="561.5" y="73.0" />
+      <point x="114.50000000000006" y="169.5" />
     </edge>
     <edge source="org.apache.dolphinscheduler.plugin.datasource.api.datasource.AbstractDataSourceProcessor" target="org.apache.dolphinscheduler.plugin.datasource.api.datasource.DataSourceProcessor" relationship="REALIZATION">
-      <point x="0.0" y="-103.5" />
-      <point x="0.0" y="169.5" />
+      <point x="0.0" y="-181.5" />
+      <point x="208.0" y="73.0" />
+      <point x="332.4999999999999" y="73.0" />
+      <point x="-114.5" y="169.5" />
     </edge>
     <edge source="org.apache.dolphinscheduler.spi.datasource.AdHocDataSourceClient" target="org.apache.dolphinscheduler.spi.datasource.DataSourceClient" relationship="INTERFACE_GENERALIZATION">
       <point x="0.0" y="-14.0" />
-      <point x="1547.845667870036" y="-47.07220216606498" />
-      <point x="1722.0920577617333" y="-47.07220216606498" />
+      <point x="128.30092592592587" y="1129.0" />
+      <point x="301.05092592592587" y="1129.0" />
       <point x="0.0" y="26.5" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.mysql.MySQLAdHocDataSourceClient" target="org.apache.dolphinscheduler.plugin.datasource.api.client.BaseAdHocDataSourceClient" relationship="GENERALIZATION">
+      <point x="0.0" y="-26.5" />
+      <point x="-79.5" y="2219.0" />
+      <point x="161.56481481481478" y="2219.0" />
+      <point x="0.0" y="71.5" />
     </edge>
     <edge source="org.apache.dolphinscheduler.spi.datasource.PooledDataSourceClient" target="org.apache.dolphinscheduler.spi.datasource.DataSourceClient" relationship="INTERFACE_GENERALIZATION">
       <point x="0.0" y="-26.5" />
-      <point x="1972.7418772563178" y="-47.07220216606498" />
-      <point x="1722.0920577617333" y="-47.07220216606498" />
+      <point x="519.5509259259259" y="1129.0" />
+      <point x="301.05092592592587" y="1129.0" />
       <point x="0.0" y="26.5" />
     </edge>
+    <edge source="org.apache.dolphinscheduler.spi.datasource.DefaultConnectionParam" target="org.apache.dolphinscheduler.spi.datasource.BaseConnectionParam" relationship="GENERALIZATION">
+      <point x="0.0" y="-38.0" />
+      <point x="979.1759259259259" y="1987.0" />
+      <point x="958.8009259259259" y="1987.0" />
+      <point x="68.25" y="401.5" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.spi.datasource.BaseConnectionParam" target="org.apache.dolphinscheduler.spi.datasource.ConnectionParam" relationship="REALIZATION">
+      <point x="0.0" y="-401.5" />
+      <point x="0.0" y="37.5" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.postgresql.PostgreAdHocSQLDataSourceClient" target="org.apache.dolphinscheduler.plugin.datasource.api.client.BaseAdHocDataSourceClient" relationship="GENERALIZATION">
+      <point x="0.0" y="-26.5" />
+      <point x="369.9999999999999" y="2219.0" />
+      <point x="161.56481481481478" y="2219.0" />
+      <point x="0.0" y="71.5" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.api.client.BasePooledDataSourceClient" target="org.apache.dolphinscheduler.spi.datasource.PooledDataSourceClient" relationship="REALIZATION">
+      <point x="-115.5" y="-93.5" />
+      <point x="499.17592592592587" y="1977.0" />
+      <point x="519.5509259259259" y="1977.0" />
+      <point x="0.0" y="26.5" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.spi.datasource.DataSourceChannelFactory" target="org.apache.dolphinscheduler.spi.plugin.PrioritySPI" relationship="INTERFACE_GENERALIZATION">
+      <point x="0.0" y="-48.5" />
+      <point x="1498.1759259259259" y="1129.0" />
+      <point x="1418.4259259259259" y="1129.0" />
+      <point x="46.0" y="37.5" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourcePluginManager" target="org.apache.dolphinscheduler.spi.datasource.DataSourceChannel" relationship="TO_MANY">
+      <point x="103.0" y="-82.5" />
+      <point x="1683.4259259259259" y="1322.0" />
+      <point x="1914.175925925926" y="1322.0" />
+      <point x="0.0" y="37.5" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.postgresql.PostgreSQLDataSourceChannelFactory" target="org.apache.dolphinscheduler.spi.datasource.DataSourceChannelFactory" relationship="REALIZATION">
+      <point x="-0.0" y="-49.0" />
+      <point x="2002.175925925926" y="1289.5" />
+      <point x="1498.1759259259259" y="1289.5" />
+      <point x="-0.0" y="48.5" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourceProcessorProvider" target="org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourceProcessorManager" relationship="TO_ONE">
+      <point x="107.5" y="-82.5" />
+      <point x="107.5" y="82.5" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.api.client.BaseAdHocDataSourceClient" target="org.apache.dolphinscheduler.spi.datasource.AdHocDataSourceClient" relationship="REALIZATION">
+      <point x="-100.5" y="-71.5" />
+      <point x="61.06481481481478" y="1987.0" />
+      <point x="128.30092592592587" y="1987.0" />
+      <point x="0.0" y="14.0" />
+    </edge>
+    <edge source="org.apache.dolphinscheduler.plugin.datasource.api.client.BaseAdHocDataSourceClient" target="org.apache.dolphinscheduler.spi.datasource.BaseConnectionParam" relationship="TO_ONE">
+      <point x="100.5" y="-71.5" />
+      <point x="262.0648148148148" y="1987.0" />
+      <point x="729.0648148148148" y="1987.0" />
+      <point x="729.0648148148148" y="1977.0" />
+      <point x="822.3009259259259" y="1977.0" />
+      <point x="-68.25" y="401.5" />
+    </edge>
   </edges>
-  <settings layout="Hierarchic" zoom="0.614190687361419" showDependencies="true" x="1183.9151624548738" y="432.89711191335743" />
+  <settings layout="Hierarchic" zoom="0.7501930451563565" showDependencies="true" x="1991.175925925926" y="1429.5" />
   <SelectedNodes>
-    <node>org.apache.dolphinscheduler.spi.datasource.DataSourceChannelFactory</node>
+    <node>org.apache.dolphinscheduler.plugin.datasource.postgresql.PostgreSQLDataSourceChannelFactory</node>
   </SelectedNodes>
   <Categories>
+    <Category>Constructors</Category>
+    <Category>Fields</Category>
     <Category>Methods</Category>
   </Categories>
   <SCOPE>All</SCOPE>

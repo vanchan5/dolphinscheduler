@@ -1,0 +1,242 @@
+@startuml
+
+!theme plain
+top to bottom direction
+skinparam linetype ortho
+
+class AbstractDataSourceProcessor {
+  + AbstractDataSourceProcessor():
+  - IPV4_PATTERN: Pattern
+  - POSSIBLE_MALICIOUS_KEYS: Set<String>
+  - DATABASE_PATTER: Pattern
+  - IPV6_PATTERN: Pattern
+  - log: Logger
+  - PARAMS_PATTER: Pattern
+  # checkDatabasePatter(String): void
+  + checkDatasourceParam(BaseDataSourceParamDTO): void
+  + getDatasourceUniqueId(ConnectionParam, DbType): String
+  + splitAndRemoveComment(String): List<String>
+  # transformOtherParamToMap(String): Map<String, String>
+  # checkHost(String): void
+  # checkOther(Map<String, String>): void
+  + checkDataSourceConnectivity(ConnectionParam): boolean
+}
+interface AdHocDataSourceClient << interface >>
+class BaseAdHocDataSourceClient {
+  # BaseAdHocDataSourceClient(BaseConnectionParam, DbType):
+  - dbType: DbType
+  - baseConnectionParam: BaseConnectionParam
+  + getConnection(): Connection
+  + close(): void
+}
+class BaseConnectionParam {
+  + BaseConnectionParam():
+  # other: Map<String, String>
+  # validationQuery: String
+  # driverLocation: String
+  # address: String
+  # compatibleMode: String
+  # driverClassName: String
+  # password: String
+  # database: String
+  # user: String
+  # jdbcUrl: String
+  + getUser(): String
+  + getPassword(): String
+  + getAddress(): String
+  + setDriverClassName(String): void
+  + toString(): String
+  + getDatabase(): String
+  + getJdbcUrl(): String
+  + getDriverLocation(): String
+  + setDriverLocation(String): void
+  # canEqual(Object): boolean
+  + getDriverClassName(): String
+  + equals(Object): boolean
+  + setValidationQuery(String): void
+  + getValidationQuery(): String
+  + setDatabase(String): void
+  + setOther(Map<String, String>): void
+  + getCompatibleMode(): String
+  + setAddress(String): void
+  + hashCode(): int
+  + setCompatibleMode(String): void
+  + setPassword(String): void
+  + setJdbcUrl(String): void
+  + getOther(): Map<String, String>
+  + setUser(String): void
+}
+class BasePooledDataSourceClient {
+  + BasePooledDataSourceClient(BaseConnectionParam, DbType):
+  # dataSource: HikariDataSource
+  - log: Logger
+  # baseConnectionParam: BaseConnectionParam
+  + createDataSourcePool(BaseConnectionParam, DbType): HikariDataSource
+  + close(): void
+  + getConnection(): Connection
+}
+interface ConnectionParam << interface >> {
+  + setPassword(String): void
+  + getPassword(): String
+}
+interface DataSourceChannel << interface >> {
+  + createAdHocDataSourceClient(BaseConnectionParam, DbType): AdHocDataSourceClient
+  + createPooledDataSourceClient(BaseConnectionParam, DbType): PooledDataSourceClient
+}
+interface DataSourceChannelFactory << interface >> {
+  + create(): DataSourceChannel
+  + getIdentify(): SPIIdentify
+  + getName(): String
+}
+interface DataSourceClient << interface >> {
+  + getConnection(): Connection
+}
+class DataSourceClientProvider {
+  + DataSourceClientProvider():
+  - POOLED_DATASOURCE_CLIENT_CACHE: Cache<String, PooledDataSourceClient>
+  - log: Logger
+  - dataSourcePluginManager: DataSourcePluginManager
+  + getAdHocDataSourceClient(DbType, ConnectionParam): AdHocDataSourceClient
+  + getPooledDataSourceClient(DbType, ConnectionParam): DataSourceClient
+  + getPooledConnection(DbType, ConnectionParam): Connection
+  + getAdHocConnection(DbType, ConnectionParam): Connection
+}
+class DataSourcePluginManager {
+  + DataSourcePluginManager():
+  - log: Logger
+  - datasourceChannelMap: Map<String, DataSourceChannel>
+  + getDataSourceChannelMap(): Map<String, DataSourceChannel>
+  - loadDatasourceClient(DataSourceChannelFactory): void
+  + installPlugin(): void
+}
+interface DataSourceProcessor << interface >> {
+  + getConnection(ConnectionParam): Connection
+  + checkDataSourceConnectivity(ConnectionParam): boolean
+  + castDatasourceParamDTO(String): BaseDataSourceParamDTO
+  + createDatasourceParamDTO(String): BaseDataSourceParamDTO
+  + create(): DataSourceProcessor
+  + getDatasourceDriver(): String
+  + createConnectionParams(String): ConnectionParam
+  + splitAndRemoveComment(String): List<String>
+  + getValidationQuery(): String
+  + getDatasourceUniqueId(ConnectionParam, DbType): String
+  + getDbType(): DbType
+  + getJdbcUrl(ConnectionParam): String
+  + checkDatasourceParam(BaseDataSourceParamDTO): void
+  + createConnectionParams(BaseDataSourceParamDTO): ConnectionParam
+}
+class DataSourceProcessorManager {
+  + DataSourceProcessorManager():
+  - dataSourceProcessorMap: Map<String, DataSourceProcessor>
+  - log: Logger
+  + getDataSourceProcessorMap(): Map<String, DataSourceProcessor>
+  - loadDatasourceClient(DataSourceProcessor): void
+  + installProcessor(): void
+}
+class DataSourceProcessorProvider {
+  - DataSourceProcessorProvider():
+  - log: Logger
+  - dataSourcePluginManager: DataSourceProcessorManager
+  + initialize(): void
+  + getDataSourceProcessor(DbType): DataSourceProcessor
+  + getDataSourceProcessorMap(): Map<String, DataSourceProcessor>
+}
+class DefaultConnectionParam {
+  + DefaultConnectionParam():
+  + toString(): String
+}
+class MySQLAdHocDataSourceClient {
+  + MySQLAdHocDataSourceClient(BaseConnectionParam, DbType):
+}
+class MySQLDataSourceProcessor {
+  + MySQLDataSourceProcessor():
+  - log: Logger
+  - ALLOW_LOAD_LOCAL_IN_FILE_NAME: String
+  - AUTO_DESERIALIZE: String
+  - ALLOW_LOCAL_IN_FILE_NAME: String
+  - ALLOW_URL_IN_LOCAL_IN_FILE_NAME: String
+  + createConnectionParams(BaseDataSourceParamDTO): BaseConnectionParam
+  - transformOther(Map<String, String>): String?
+  + createConnectionParams(String): ConnectionParam
+  + getJdbcUrl(ConnectionParam): String
+  - getConnectionProperties(MySQLConnectionParam, String, String): Properties
+  + castDatasourceParamDTO(String): BaseDataSourceParamDTO
+  + getConnection(ConnectionParam): Connection
+  + createDatasourceParamDTO(String): BaseDataSourceParamDTO
+  + getDbType(): DbType
+  + splitAndRemoveComment(String): List<String>
+  + getValidationQuery(): String
+  + create(): DataSourceProcessor
+  + getDatasourceDriver(): String
+  - checkKeyIsLegitimate(String): boolean
+}
+interface PooledDataSourceClient << interface >> {
+  + createDataSourcePool(BaseConnectionParam, DbType): DataSource
+}
+class PostgreAdHocSQLDataSourceClient {
+  + PostgreAdHocSQLDataSourceClient(BaseConnectionParam, DbType):
+}
+class PostgreSQLDataSourceChannel {
+  + PostgreSQLDataSourceChannel():
+  + createAdHocDataSourceClient(BaseConnectionParam, DbType): AdHocDataSourceClient
+  + createPooledDataSourceClient(BaseConnectionParam, DbType): PooledDataSourceClient
+}
+class PostgreSQLDataSourceChannelFactory {
+  + PostgreSQLDataSourceChannelFactory():
+  + create(): DataSourceChannel
+  + getName(): String
+}
+class PostgreSQLDataSourceProcessor {
+  + PostgreSQLDataSourceProcessor():
+  + create(): DataSourceProcessor
+  - transformOther(Map<String, String>): String?
+  + getJdbcUrl(ConnectionParam): String
+  + createConnectionParams(BaseDataSourceParamDTO): BaseConnectionParam
+  + castDatasourceParamDTO(String): BaseDataSourceParamDTO
+  + getDbType(): DbType
+  + splitAndRemoveComment(String): List<String>
+  + getValidationQuery(): String
+  + getDatasourceDriver(): String
+  + createConnectionParams(String): ConnectionParam
+  + getConnection(ConnectionParam): Connection
+  + createDatasourceParamDTO(String): BaseDataSourceParamDTO
+}
+interface PrioritySPI << interface >> {
+  + getIdentify(): SPIIdentify
+  + compareTo(Integer): int
+}
+class PrioritySPIFactory<T> {
+  + PrioritySPIFactory(Class<T>):
+  - log: Logger
+  - map: Map<String, T>
+  + getSPIMap(): Map<String, T>
+  - resolveConflict(T): void
+}
+
+AbstractDataSourceProcessor         -[#008200,dashed]-^  DataSourceProcessor
+AdHocDataSourceClient               -[#008200,plain]-^  DataSourceClient
+BaseAdHocDataSourceClient           -[#008200,dashed]-^  AdHocDataSourceClient
+BaseAdHocDataSourceClient          "1" *-[#595959,plain]-> "baseConnectionParam\n1" BaseConnectionParam
+BaseConnectionParam                 -[#008200,dashed]-^  ConnectionParam
+BasePooledDataSourceClient         "1" *-[#595959,plain]-> "baseConnectionParam\n1" BaseConnectionParam
+BasePooledDataSourceClient          -[#008200,dashed]-^  PooledDataSourceClient
+DataSourceChannelFactory            -[#008200,plain]-^  PrioritySPI
+DataSourceClientProvider            -[#595959,dashed]->  DataSourcePluginManager            : "«create»"
+DataSourceClientProvider           "1" *-[#595959,plain]-> "dataSourcePluginManager\n1" DataSourcePluginManager
+DataSourcePluginManager            "1" *-[#595959,plain]-> "datasourceChannelMap\n*" DataSourceChannel
+DataSourcePluginManager             -[#595959,dashed]->  PrioritySPIFactory                 : "«create»"
+DataSourceProcessorManager         "1" *-[#595959,plain]-> "dataSourceProcessorMap\n*" DataSourceProcessor
+DataSourceProcessorProvider        "1" *-[#595959,plain]-> "dataSourcePluginManager\n1" DataSourceProcessorManager
+DataSourceProcessorProvider         -[#595959,dashed]->  DataSourceProcessorManager         : "«create»"
+DefaultConnectionParam              -[#000082,plain]-^  BaseConnectionParam
+MySQLAdHocDataSourceClient          -[#000082,plain]-^  BaseAdHocDataSourceClient
+MySQLDataSourceProcessor            -[#000082,plain]-^  AbstractDataSourceProcessor
+PooledDataSourceClient              -[#008200,plain]-^  DataSourceClient
+PostgreAdHocSQLDataSourceClient     -[#000082,plain]-^  BaseAdHocDataSourceClient
+PostgreSQLDataSourceChannel         -[#008200,dashed]-^  DataSourceChannel
+PostgreSQLDataSourceChannel         -[#595959,dashed]->  PostgreAdHocSQLDataSourceClient    : "«create»"
+PostgreSQLDataSourceChannelFactory  -[#008200,dashed]-^  DataSourceChannelFactory
+PostgreSQLDataSourceChannelFactory  -[#595959,dashed]->  PostgreSQLDataSourceChannel        : "«create»"
+PostgreSQLDataSourceProcessor       -[#000082,plain]-^  AbstractDataSourceProcessor
+PrioritySPIFactory                  -[#595959,dashed]->  PrioritySPI
+@enduml
