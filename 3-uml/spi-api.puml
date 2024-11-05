@@ -178,6 +178,22 @@ package "API" #DDDDDD{
       + installPlugin(): void
     }
 
+' API 数据源处理器 start
+  note top of DataSourceProcessor: 数据源处理器: \n 1、连接信息转换为DTO \n 2、check参数合理性 \n 3、获取连接getJdbcUrl\n 4、获取getDbType\n 5、创建DataSourceProcessor\n 6、获取连接：Connection getConnection()
+  note top of DataSourceProcessorManager: 数据源处理器管理：生成DataSourceProcessor和缓存数据源处理器
+  note top of DataSourceProcessorProvider: 数据源处理器提供者: 调用DataSourcePluginManager管理者获取DataSourceProcessor
+' API 数据源处理器 end
+
+' API 数据源客户端 start
+  note top of DataSourcePluginManager: 数据源插件管理：生成获取各种类型数据源通道：DataSourceChannel，\n通过DataSourceChannelFactory生成DataSourceChannel
+  note top of DataSourceClientProvider: 数据源客户端提供：通过DataSourceChannel\n生成AdHocDataSourceClient、PooledDataSourceClient两种客户端
+' API 数据源客户端 end
+
+  note top of BaseAdHocDataSourceClient: BaseAdHocDataSourceClient：全参构造函数指定了数据源参数和类型
+  note top of BaseAdHocDataSourceClient:getConnection：根据参数+类型，通过DataSourceProcessorProvider\n.getDataSourceProcessor(dbType)\n.getConnection(baseConnectionParam)\n获取客户端连接
+
+
+
 }
 
 
@@ -205,7 +221,26 @@ package "ds-datasource-Postgresql" #DDDDDD{
           + PostgreSQLDataSourceChannelFactory():
           + create(): DataSourceChannel
           + getName(): String
-        }
+   }
+
+   class PostgreSQLDataSourceChannel {
+     + PostgreSQLDataSourceChannel():
+     + createAdHocDataSourceClient(BaseConnectionParam, DbType): AdHocDataSourceClient
+     + createPooledDataSourceClient(BaseConnectionParam, DbType): PooledDataSourceClient
+   }
+
+   class PostgreSQLDataSourceParamDTO {
+     + PostgreSQLDataSourceParamDTO():
+     + toString(): String
+     + getType(): DbType
+   }
+
+   class PostgreSQLConnectionParam {
+     + PostgreSQLConnectionParam():
+     + toString(): String
+   }
+
+
 }
 
 
@@ -236,14 +271,43 @@ package "ds-datasource-mysql" #DDDDDD{
       + getDatasourceDriver(): String
       - checkKeyIsLegitimate(String): boolean
     }
+}
 
+package "TASK" #DDDDDD {
+    class SqlTask {
+      + SqlTask(TaskExecutionContext):
+      - CREATE_OR_REPLACE_FUNCTION_FORMAT: String
+      - sqlTaskExecutionContext: SQLTaskExecutionContext
+      - log: Logger
+      - sqlParameters: SqlParameters
+      - baseConnectionParam: BaseConnectionParam
+      - QUERY_LIMIT: int
+      + TEST_FLAG_YES: int
+      - dbType: DbType
+      - taskExecutionContext: TaskExecutionContext
+      - resultProcess(ResultSet): String
+      + cancel(): void
+      - executeUpdate(Connection, List<SqlBinds>, String): String
+      - printReplacedSql(String, String, String, Map<Integer, Property>): void
+      - getSqlAndSqlParamsMap(String): SqlBinds
+      - generateEmptyRow(ResultSet): ArrayNode
+      - setNonQuerySqlReturn(String, List<Property>): String
+      + handle(TaskCallBack): void
+      + getParameters(): AbstractParameters
+      - replaceOriginalValue(String, String, Map<String, Property>): String
+      + executeFuncAndSql(List<SqlBinds>, List<SqlBinds>, List<SqlBinds>): void
+      - prepareStatementAndBind(Connection, SqlBinds): PreparedStatement
+      - close(Connection): void
+      - sendAttachment(int, String, String): void
+      - executeQuery(Connection, SqlBinds, String): String
+    }
+    note right of SqlTask:获取DataSourceProcessor=\n1、DataSourceProcessorProvider.getDataSourceProcessor(dbType)\n 2、AdHocDataSourceClient = \nDataSourceClientProvider.getAdHocDataSourceClient(dbType,baseConnectionParam)
 }
 
 
 DataSourceProcessor                                                             ^-[#008200,dashed]-                     AbstractDataSourceProcessor
 DataSourceProcessor                 "dataSourceProcessorMap*"                   <-[#595959,plain]-* "1"                 DataSourceProcessorManager
 AbstractDataSourceProcessor                                                     ^-[#000082,plain]-                      PostgreSQLDataSourceProcessor
-AbstractDataSourceProcessor                                                     ^-[#000082,plain]-                      MySQLDataSourceProcessor
 DataSourceProcessorManager          "dataSourcePluginManager\n1"                <-[#595959,plain]-* "\n1"               DataSourceProcessorProvider
 DataSourceProcessorManager                                                      <-[#595959,dashed]-                     DataSourceProcessorProvider : "«create»"
 
@@ -251,8 +315,6 @@ DataSourceProcessorManager                                                      
 DataSourceClient                                                                ^-[#008200,plain]-                      AdHocDataSourceClient
 DataSourceClient                                                                ^-[#008200,plain]-                      PooledDataSourceClient
 AdHocDataSourceClient                                                           ^-[#008200,dashed]-                     BaseAdHocDataSourceClient
-BaseAdHocDataSourceClient                                                       ^-[#000082,plain]-                      PostgreAdHocSQLDataSourceClient
-BaseAdHocDataSourceClient                                                       ^-[#000082,plain]-                      MySQLAdHocDataSourceClient
 PooledDataSourceClient                                                          ^-[#008200,dashed]-                     BasePooledDataSourceClient
 BaseConnectionParam             "baseConnectionParam\n1"                        <-[#595959,plain]-* "1"                 BasePooledDataSourceClient
 BaseConnectionParam             "baseConnectionParam\n1"                        <-[#595959,plain]-* "1"                 BaseAdHocDataSourceClient
@@ -261,41 +323,32 @@ BaseConnectionParam                                                             
 
 PrioritySPI                                                                     <-[#595959,dashed]-                     PrioritySPIFactory
 PrioritySPI                                                                     ^-[#008200,plain]-                      DataSourceChannelFactory
-DataSourceChannelFactory                                                        ^-[#008200,dashed]-                     PostgreSQLDataSourceChannelFactory
-DataSourceChannel                                                               <-[#595959,dashed]-                     DataSourceChannelFactory           : "«create»"
 DataSourceChannel               "datasourceChannelMap\n*"                       <-[#595959,plain]-* "1"                 DataSourcePluginManager
 PrioritySPIFactory                                                              <-[#595959,dashed]-                     DataSourcePluginManager            : "«create»"
 DataSourcePluginManager                                                         <-[#595959,dashed]-                     DataSourceClientProvider           : "«create»"
 DataSourcePluginManager        "dataSourcePluginManager\n1"                     <-[#595959,plain]-* "1"                 DataSourceClientProvider
 
+'POSTGRESQL
+DataSourceChannel                                                               ^-[#008200,dashed]-                     PostgreSQLDataSourceChannel
+PostgreAdHocSQLDataSourceClient                                                 <-[#595959,dashed]-                     PostgreSQLDataSourceChannel         : "«create»"
+PostgreSQLDataSourceChannel                                                     <-[#595959,dashed]-                     PostgreSQLDataSourceChannelFactory  : "«create»"
+PostgreSQLDataSourceParamDTO                                                    <-[#595959,dashed]-                     PostgreSQLDataSourceProcessor       : "«create»"
+BaseConnectionParam                                                             ^-[#000082,plain]-                      PostgreSQLConnectionParam
+PostgreSQLConnectionParam                                                       <-[#595959,dashed]-                     PostgreSQLDataSourceProcessor       : "«create»"
+BaseAdHocDataSourceClient                                                       ^-[#000082,plain]-                      PostgreAdHocSQLDataSourceClient
+DataSourceChannelFactory                                                        ^-[#008200,dashed]-                     PostgreSQLDataSourceChannelFactory
+'POSTGRESQL
+
+'MYSQL
+'AbstractDataSourceProcessor                                                     ^-[#000082,plain]-                      MySQLDataSourceProcessor
+'BaseAdHocDataSourceClient                                                       ^-[#000082,plain]-                      MySQLAdHocDataSourceClient
+'MYSQL
+
+'SQL-TASK
+BaseConnectionParam "baseConnectionParam\n1"<-[#595959,plain]-* "1" SqlTask
+'SQL-TASK
 
 
-'AbstractDataSourceProcessor      -[#008200,dashed]-^  DataSourceProcessor
-'DataSourceProcessorManager      "1" *-[#595959,plain]-> "dataSourceProcessorMap\n*" DataSourceProcessor
-'MySQLDataSourceProcessor         -[#000082,plain]-^  AbstractDataSourceProcessor
-'PostgreSQLDataSourceProcessor    -[#000082,plain]-^  AbstractDataSourceProcessor
-'DataSourceProcessorProvider     "1" *-[#595959,plain]-> "dataSourcePluginManager\n1" DataSourceProcessorManager
-'DataSourceProcessorProvider      -[#595959,dashed]->  DataSourceProcessorManager      : "«create»"
-
-'AdHocDataSourceClient            -[#008200,plain]-^  DataSourceClient
-'PooledDataSourceClient           -[#008200,plain]-^  DataSourceClient
-'BaseAdHocDataSourceClient        -[#008200,dashed]-^  AdHocDataSourceClient
-'BaseAdHocDataSourceClient       "1" *-[#595959,plain]-> "baseConnectionParam\n1" BaseConnectionParam
-'PostgreAdHocSQLDataSourceClient  -[#000082,plain]-^  BaseAdHocDataSourceClient
-'MySQLAdHocDataSourceClient       -[#000082,plain]-^  BaseAdHocDataSourceClient
-'
-'BasePooledDataSourceClient      "1" *-[#595959,plain]-> "baseConnectionParam\n1" BaseConnectionParam
-'BasePooledDataSourceClient       -[#008200,dashed]-^  PooledDataSourceClient
 
 
-'BaseConnectionParam              -[#008200,dashed]-^  ConnectionParam
-'DefaultConnectionParam           -[#000082,plain]-^  BaseConnectionParam
-
-
-'DataSourceChannelFactory         -[#008200,plain]-^  PrioritySPI
-'DataSourcePluginManager         "1" *-[#595959,plain]-> "datasourceChannelMap\n*" DataSourceChannel
-'DataSourcePluginManager          -[#595959,dashed]->  PrioritySPIFactory              : "«create»"
-'PrioritySPIFactory               -[#595959,dashed]->  PrioritySPI
-'DataSourceClientProvider         -[#595959,dashed]->  DataSourcePluginManager         : "«create»"
-'DataSourceClientProvider        "1" *-[#595959,plain]-> "dataSourcePluginManager\n1" DataSourcePluginManager
 @enduml
