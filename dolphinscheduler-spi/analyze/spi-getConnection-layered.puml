@@ -1,0 +1,163 @@
+@startuml GetConnection-Three-Layer-Architecture
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam linetype ortho
+
+title getConnection() 三层协作架构 - 原理与灵活性
+
+package "业务代码层" #FFFDE7 {
+    component [业务调用\n需求: 获取数据库连接] as Business
+}
+
+package "SPI 契约层\ndolphinscheduler-spi" #E3F2FD {
+    component [DataSourceClient\ngetConnection()\nclose()] as IClient
+    component [AdHocDataSourceClient\n临时连接接口] as IAdHoc
+    component [PooledDataSourceClient\n池化连接接口] as IPooled
+    component [DataSourceChannelFactory\ncreate()] as IFactory
+}
+
+package "API 实现层\ndolphinscheduler-datasource-api" #FFF3E0 {
+    component [DataSourceClientProvider\ngetPooledConnection()\ngetAdHocConnection()] as Provider
+    component [BaseAdHocDataSourceClient\ngetConnection()\n直接创建新连接] as BaseAdHoc
+    component [BasePooledDataSourceClient\ngetConnection()\n从连接池获取] as BasePooled
+    component [DataSourceProcessor\ngetConnection(params)\ngetJdbcUrl()\ngetDriver()] as IProcessor
+}
+
+package "插件实现层\ndolphinscheduler-datasource-*" #E8F5E9 {
+    component [MySQLDataSourceProcessor\ngetConnection()\nDriver: com.mysql.cj.jdbc.Driver\nValidation: SELECT 1] as MySQLProc
+    component [PostgreSQLDataSourceProcessor\ngetConnection()\nDriver: org.postgresql.Driver] as PGProc
+    component [OracleDataSourceProcessor\ngetConnection()\nValidation: SELECT 1 FROM DUAL] as OracleProc
+    component [其他 25 种数据源] as Others
+}
+
+component [java.sql.Connection\n最终目标] as FinalConn #F48FB1
+
+' AdHoc 路径
+Business -[#FF6B6B,bold]down-> Provider : 1.getAdHocConnection()
+Provider -[#FF6B6B,bold]down-> BaseAdHoc : 2.创建AdHoc客户端
+BaseAdHoc -[#FF6B6B,bold]right-> IProcessor : 3.调用getConnection()
+IProcessor -[#FF6B6B,bold]down-> MySQLProc : 4.适配MySQL
+MySQLProc -[#FF6B6B,bold]down-> FinalConn : 5.返回新连接
+
+' Pooled 路径
+Business -[#4CAF50,bold]down-> Provider : 1.getPooledConnection()
+Provider -[#4CAF50,bold]down-> BasePooled : 2.创建Pooled客户端
+BasePooled -[#4CAF50,dotted]right-> IProcessor : 3.初始化时调用
+BasePooled -[#4CAF50,bold]down-> FinalConn : 4.返回池化连接
+
+' SPI 契约
+IClient <|-- IAdHoc
+IClient <|-- IPooled
+IAdHoc <|.. BaseAdHoc
+IPooled <|.. BasePooled
+IFactory -up-> IClient
+
+' Processor 实现
+IProcessor <|.. MySQLProc
+IProcessor <|.. PGProc
+IProcessor <|.. OracleProc
+IProcessor <|.. Others
+
+FinalConn -[#2196F3,bold]up-> Business : 6.业务使用
+
+note right of IClient
+  SPI 层职责
+  ============
+  定义契约 (What)
+  - 定义接口规范
+  - 不关心实现细节
+  - 支持多种实现
+  
+  核心接口:
+  DataSourceClient
+    getConnection() 核心方法
+    close()
+  
+  扩展点:
+  DataSourceChannelFactory
+    每个数据源提供一个实现
+end note
+
+note right of Provider
+  API 层职责
+  ============
+  提供实现 (How)
+  - 实现连接策略
+  - 管理连接生命周期
+  - 提供统一入口
+  
+  两种策略:
+  AdHoc: 临时连接
+    不使用连接池
+    每次创建新连接
+    适合低频场景
+  
+  Pooled: 池化连接
+    使用 HikariCP
+    连接复用
+    适合高频场景
+  
+  核心抽象:
+  DataSourceProcessor
+    适配不同数据库
+end note
+
+note right of MySQLProc
+  插件层职责
+  ============
+  具体适配 (Adapt)
+  - 实现特定数据库逻辑
+  - 适配数据库差异
+  - 可插拔扩展
+  
+  每个数据源提供:
+  DataSourceProcessor 实现
+    getConnection()
+    getJdbcUrl()
+    getDatasourceDriver()
+    getValidationQuery()
+  
+  灵活性:
+  新增数据源只需实现接口
+  通过 @AutoService 注册
+  无需修改核心代码
+end note
+
+note bottom of FinalConn
+  getConnection() 实现路径
+  =========================
+  
+  路径 1: AdHoc 临时连接
+  AdHocClient.getConnection()
+    -> Processor.getConnection(params)
+      -> DriverManager.getConnection()
+        -> 返回新连接
+  
+  路径 2: Pooled 池化连接
+  PooledClient.getConnection()
+    -> HikariDataSource.getConnection()
+      -> pool 中获取/创建连接
+        -> 返回池化连接
+  
+  关键区别:
+  AdHoc: 每次调用 Processor
+  Pooled: 只在初始化时调用 Processor
+end note
+
+legend right
+  |= 符号 |= 说明 |
+  | 红色箭头 | AdHoc 临时连接路径 |
+  | 绿色箭头 | Pooled 池化连接路径 |
+  | 蓝色箭头 | 返回给业务使用 |
+  | 虚线箭头 | 初始化时调用 |
+  
+  架构灵活性体现:
+  1. 三层分离 (SPI/API/Plugin)
+  2. 策略可选 (AdHoc/Pooled)
+  3. 数据源可插拔 (28种)
+  4. 实现可定制 (优先级机制)
+  5. 连接池可配置 (HikariCP)
+endlegend
+
+@enduml

@@ -1,0 +1,119 @@
+@startuml DolphinScheduler-Pooled-Connection-Flow
+
+!theme plain
+skinparam backgroundColor white
+skinparam shadowing false
+
+title 池化连接使用流程
+
+participant "业务代码" as Business
+participant "DataSourceClientProvider" as Provider
+participant "连接池缓存\nCache" as Cache
+participant "DataSourcePluginManager" as Manager
+participant "MySQLDataSourceChannel" as Channel
+participant "MySQLPooledDataSourceClient" as Client
+participant "HikariDataSource\n连接池" as Pool
+participant "MySQL数据库" as DB
+
+Business -> Provider: getPooledConnection(\n  DbType.MYSQL, connectionParams)
+activate Provider
+
+Provider -> Cache: 检查缓存\nkey = getDatasourceUniqueId(params, dbType)
+activate Cache
+
+alt 缓存命中
+    Cache --> Provider: 返回缓存的 Client
+    deactivate Cache
+else 缓存未命中
+    Cache --> Provider: 返回 null
+    deactivate Cache
+    
+    Provider -> Manager: getDataSourceChannelMap()\n  .get("mysql")
+    activate Manager
+    Manager --> Provider: 返回 MySQLDataSourceChannel
+    deactivate Manager
+    
+    Provider -> Channel: createPooledDataSourceClient(\n  params, DbType.MYSQL)
+    activate Channel
+    
+    Channel -> Client: new MySQLPooledDataSourceClient(\n  params, DbType.MYSQL)
+    activate Client
+    
+    note over Client
+        <b>构造函数中初始化</b>
+        1. 保存连接参数
+        2. 调用 createDataSourcePool()
+    end note
+    
+    Client -> Client: createDataSourcePool(\n  params, DbType.MYSQL)
+    
+    Client -> Pool: new HikariDataSource()
+    activate Pool
+    
+    note over Pool
+        <b>配置连接池参数</b>
+        • driverClassName: com.mysql.cj.jdbc.Driver
+        • jdbcUrl: jdbc:mysql://localhost:3306/db
+        • username: root
+        • password: ******
+        • minimumIdle: 5
+        • maximumPoolSize: 50
+        • connectionTestQuery: SELECT 1
+    end note
+    
+    Pool --> Client: 返回连接池实例
+    Client --> Channel: 返回 MySQLPooledDataSourceClient
+    deactivate Client
+    
+    Channel --> Provider: 返回 Client
+    deactivate Channel
+    
+    Provider -> Cache: cache.put(key, client)
+    activate Cache
+    Cache --> Provider: 保存成功
+    deactivate Cache
+end
+
+Provider -> Client: getConnection()
+activate Client
+
+Client -> Pool: getConnection()
+
+alt 池中有空闲连接
+    Pool --> Client: 复用现有连接
+else 池中无空闲连接且未达上限
+    Pool -> DB: 创建新连接
+    activate DB
+    DB --> Pool: Connection
+    deactivate DB
+    Pool --> Client: 返回新连接
+else 池已满
+    Pool --> Client: 等待或抛出异常
+end
+
+Client --> Provider: 返回 Connection
+deactivate Client
+
+Provider --> Business: 返回 Connection
+deactivate Provider
+
+note over Business
+    <b>业务代码使用连接</b>
+    try (Connection conn = ...) {
+        Statement stmt = conn.createStatement();
+        ResultSet rs = stmt.executeQuery("...");
+        // 处理结果
+    }
+end note
+
+Business -> Business: conn.close()
+
+note over Pool
+    <b>连接归还到池中</b>
+    不是真正关闭连接
+    而是标记为空闲状态
+    等待下次复用
+end note
+
+@enduml
+

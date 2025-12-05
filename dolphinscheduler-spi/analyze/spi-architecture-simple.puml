@@ -1,0 +1,198 @@
+@startuml DolphinScheduler-SPI-Architecture-Simple
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+title DolphinScheduler SPI 架构图 (简化版)
+
+' ============================================
+' 业务层
+' ============================================
+package "业务层" #FFFDE7 {
+    component [业务代码\n---\n获取数据库连接] as Business
+}
+
+' ============================================
+' 门面层
+' ============================================
+package "门面层" #FFE0B2 {
+    component [DataSourceClientProvider\n---\n统一入口\ngetPooledConnection()\ngetAdHocConnection()] as Provider
+}
+
+' ============================================
+' 管理层
+' ============================================
+package "管理层" #FFF3E0 {
+    component [DataSourcePluginManager\n---\n管理所有 Channel\nMap<String, Channel>] as PluginMgr
+    
+    component [DataSourceProcessorProvider\n---\n提供 Processor\ngetDataSourceProcessor()] as ProcessorProvider
+}
+
+' ============================================
+' SPI 层 - 核心抽象
+' ============================================
+package "SPI 层 - 核心抽象" #E3F2FD {
+    
+    rectangle "SPI 机制" #BBDEFB {
+        component [PrioritySPI\n---\nSPI 基础接口\n优先级机制] as PrioritySPI
+        
+        component [PrioritySPIFactory\n---\nSPI 加载器\nServiceLoader] as SPIFactory
+    }
+    
+    rectangle "数据源抽象" #90CAF9 {
+        component [DataSourceChannelFactory\n---\n工厂接口\ncreate() → Channel] as ChannelFactory
+        
+        component [DataSourceChannel\n---\n通道接口\ncreateAdHocClient()\ncreatePooledClient()] as Channel
+        
+        component [BaseConnectionParam\n---\n连接参数\nuser, password, address\njdbcUrl, driverClassName] as ConnParam
+    }
+    
+    rectangle "客户端抽象" #64B5F6 {
+        component [DataSourceClient\n---\n客户端接口\ngetConnection()] as Client
+        
+        component [AdHocDataSourceClient\n临时连接] as AdHocClient
+        
+        component [PooledDataSourceClient\n池化连接] as PooledClient
+    }
+}
+
+' ============================================
+' 实现层
+' ============================================
+package "实现层" #E8F5E9 {
+    
+    rectangle "客户端实现" #C8E6C9 {
+        component [BaseAdHocDataSourceClient\n---\n每次创建新连接] as BaseAdHoc
+        
+        component [BasePooledDataSourceClient\n---\n维护连接池\nHikariDataSource] as BasePooled
+    }
+    
+    rectangle "处理器实现" #A5D6A7 {
+        component [DataSourceProcessor\n---\n处理器接口\ngetConnection(params)\ngetJdbcUrl()\ngetDriver()] as Processor
+        
+        component [MySQLDataSourceProcessor\nPostgreSQLProcessor\nOracleProcessor\n... 28种] as Processors
+    }
+}
+
+' ============================================
+' 插件实现示例
+' ============================================
+package "MySQL 插件示例" #F3E5F5 {
+    component [MySQLDataSourceChannelFactory\n@AutoService] as MySQLFactory
+    component [MySQLDataSourceChannel] as MySQLChannel
+    component [MySQLAdHocDataSourceClient\nMySQLPooledDataSourceClient] as MySQLClients
+}
+
+' ============================================
+' 最终目标
+' ============================================
+component [java.sql.Connection\n数据库连接] as Connection #FFCDD2
+
+' ============================================
+' 核心调用流程 (简化连线)
+' ============================================
+
+' 业务调用
+Business -down-> Provider : 调用
+
+' Provider 获取 Channel
+Provider -down-> PluginMgr : 获取 Channel
+
+' PluginMgr 使用 SPI
+PluginMgr .right.> SPIFactory : 启动时加载
+
+' SPI 发现工厂
+SPIFactory .down.> ChannelFactory : 自动发现
+
+' 工厂创建通道
+ChannelFactory .down.> Channel : create()
+
+' 通道创建客户端
+Channel -down-> BaseAdHoc : 创建 AdHoc
+Channel -down-> BasePooled : 创建 Pooled
+
+' 客户端使用参数
+BaseAdHoc .left.> ConnParam : 使用参数
+BasePooled .left.> ConnParam : 使用参数
+
+' AdHoc 使用 Processor
+BaseAdHoc -right-> ProcessorProvider : 调用获取
+
+' ProcessorProvider 提供 Processor
+ProcessorProvider -down-> Processor : 提供
+
+' Processor 实现
+Processor -down-> Processors : 具体实现
+
+' 客户端获取连接
+BaseAdHoc -down-> Connection : 返回新连接
+BasePooled -down-> Connection : 返回池化连接
+
+' 最终返回
+Connection -up-> Business : 业务使用
+
+' ============================================
+' 两种路径说明
+' ============================================
+note right of BaseAdHoc
+    【AdHoc 路径】
+    getConnection():
+    1. 调用 ProcessorProvider
+    2. 获取 Processor
+    3. Processor.getConnection()
+    4. 返回新连接
+    
+    特点: 每次创建，适合测试
+end note
+
+note right of BasePooled
+    【Pooled 路径】
+    getConnection():
+    1. 从 HikariDataSource 获取
+    2. 连接复用
+    3. 不需要 Processor
+    
+    特点: 连接池，适合生产
+end note
+
+note bottom of SPIFactory
+    【SPI 机制】
+    启动时自动发现所有插件
+    通过 ServiceLoader 加载
+    处理优先级冲突
+end note
+
+note bottom of ConnParam
+    【参数传递】
+    统一的连接参数模型
+    
+    包含:
+    • 用户名密码
+    • 地址端口数据库
+    • JDBC URL 和驱动
+    • 扩展参数 Map
+    
+    传递给:
+    • Channel → Client → Processor
+end note
+
+legend right
+    |= 颜色 |= 说明 |
+    | 黄色 | 业务层 |
+    | 橙色 | 门面层 |
+    | 浅橙 | 管理层 |
+    | 蓝色 | SPI 核心层 |
+    | 绿色 | 实现层 |
+    | 紫色 | 插件示例 |
+    | 红色 | 最终目标 |
+    
+    关键流程:
+    1. SPI 机制自动发现插件
+    2. 管理器管理 Channel 和 Processor
+    3. 业务通过门面获取连接
+    4. 两种策略: AdHoc 和 Pooled
+endlegend
+
+@enduml
+

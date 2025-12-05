@@ -1,0 +1,532 @@
+@startuml DolphinScheduler-SPI-DataSource-Architecture
+
+!define INTERFACE_COLOR #E1F5FE
+!define ABSTRACT_COLOR #FFF9C4
+!define CONCRETE_COLOR #C8E6C9
+!define MANAGER_COLOR #FFE0B2
+!define FACTORY_COLOR #F8BBD0
+
+skinparam packageStyle rectangle
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam linetype ortho
+
+title DolphinScheduler SPI & DataSource API 工作原理架构图
+
+' ============================================
+' SPI 基础层 (dolphinscheduler-spi)
+' ============================================
+package "dolphinscheduler-spi" {
+    
+    ' SPI 插件机制
+    package "plugin" <<Rectangle>> {
+        interface PrioritySPI <<SPI基础接口>> INTERFACE_COLOR {
+            + getIdentify(): SPIIdentify
+            + compareTo(Integer): int
+        }
+        
+        class SPIIdentify CONCRETE_COLOR {
+            - name: String
+            - priority: int
+        }
+        
+        class "PrioritySPIFactory<T extends PrioritySPI>" as PrioritySPIFactory FACTORY_COLOR {
+            - map: Map<String, T>
+            + PrioritySPIFactory(Class<T> spiClass)
+            + getSPIMap(): Map<String, T>
+            - resolveConflict(T newSPI): void
+            --
+            【核心功能】
+            1. ServiceLoader.load() 自动发现
+            2. 优先级冲突解决
+            3. 返回不可变 Map
+        }
+        
+        note right of PrioritySPIFactory
+            通过 Java SPI 机制
+            自动发现所有插件实现
+            支持优先级覆盖
+        end note
+    }
+    
+    ' 数据源 SPI 定义
+    package "datasource" <<Rectangle>> {
+        interface DataSourceChannelFactory <<SPI扩展点>> INTERFACE_COLOR {
+            + getName(): String
+            + create(): DataSourceChannel
+            + getIdentify(): SPIIdentify
+        }
+        
+        interface DataSourceChannel INTERFACE_COLOR {
+            + createAdHocDataSourceClient(params, dbType): AdHocDataSourceClient
+            + createPooledDataSourceClient(params, dbType): PooledDataSourceClient
+        }
+        
+        interface DataSourceClient <<顶层接口>> INTERFACE_COLOR {
+            + getConnection(): Connection
+            + close(): void
+        }
+        
+        interface AdHocDataSourceClient <<临时连接>> INTERFACE_COLOR {
+            ' Marker Interface
+        }
+        
+        interface PooledDataSourceClient <<池化连接>> INTERFACE_COLOR {
+            + createDataSourcePool(params, dbType): DataSource
+        }
+        
+        abstract class BaseConnectionParam ABSTRACT_COLOR {
+            # user: String
+            # password: String
+            # address: String
+            # database: String
+            # jdbcUrl: String
+            # driverLocation: String
+            # driverClassName: String
+            # validationQuery: String
+            # other: Map<String, String>
+        }
+        
+        interface ConnectionParam INTERFACE_COLOR {
+        }
+    }
+    
+    ' 参数系统
+    package "params" <<Rectangle>> {
+        class PluginParamsTransfer CONCRETE_COLOR {
+            + {static} transferParamsToJson(List): String
+            + {static} transferJsonToParamsList(String): List
+            + {static} getPluginParamsMap(String): Map
+            + {static} generatePluginParams(String, String): List
+        }
+        
+        class PluginParams CONCRETE_COLOR {
+            # name: String
+            # formType: String
+            # title: String
+            # value: Object
+            # props: ParamsProps
+            # validateList: List<Validate>
+        }
+        
+        note right of PluginParams
+            前后端统一的参数模型
+            支持19种表单类型
+            自动驱动前端表单渲染
+        end note
+    }
+    
+    ' 枚举定义
+    package "enums" <<Rectangle>> {
+        enum DbType CONCRETE_COLOR {
+            MYSQL, POSTGRESQL, ORACLE
+            HIVE, SPARK, CLICKHOUSE
+            ... (28种数据源)
+            --
+            + of(int): DbType
+            + ofName(String): DbType
+            + isHive(): boolean
+        }
+    }
+}
+
+' ============================================
+' DataSource API 层 (dolphinscheduler-datasource-api)
+' ============================================
+package "dolphinscheduler-datasource-api" {
+    
+    ' 插件管理器
+    package "plugin" <<Rectangle>> MANAGER_COLOR {
+        class DataSourcePluginManager <<单例>> MANAGER_COLOR {
+            - datasourceChannelMap: Map<String, DataSourceChannel>
+            + installPlugin(): void
+            + getDataSourceChannelMap(): Map
+            --
+            【工作流程】
+            1. 创建 PrioritySPIFactory
+            2. 遍历所有 Factory
+            3. 调用 create() 创建 Channel
+            4. 保存到 Map
+        }
+        
+        class DataSourceClientProvider <<门面>> MANAGER_COLOR {
+            - {static} dataSourcePluginManager: DataSourcePluginManager
+            - {static} POOLED_DATASOURCE_CLIENT_CACHE: Cache
+            + {static} getPooledConnection(DbType, ConnectionParam): Connection
+            + {static} getAdHocConnection(DbType, ConnectionParam): Connection
+            + {static} getPooledDataSourceClient(DbType, ConnectionParam): DataSourceClient
+            + {static} getAdHocDataSourceClient(DbType, ConnectionParam): DataSourceClient
+        }
+        
+        class DataSourceProcessorManager MANAGER_COLOR {
+            - dataSourceProcessorMap: Map<String, DataSourceProcessor>
+            + installProcessor(): void
+            + getDataSourceProcessorMap(): Map
+        }
+        
+        class DataSourceProcessorProvider <<单例>> MANAGER_COLOR {
+            - {static} dataSourcePluginManager: DataSourceProcessorManager
+            + {static} getDataSourceProcessor(DbType): DataSourceProcessor
+            + {static} getDataSourceProcessorMap(): Map
+        }
+        
+        note right of DataSourceClientProvider
+            【业务代码统一入口】
+            提供简便的 API
+            内置连接池缓存
+            自动管理资源生命周期
+        end note
+    }
+    
+    ' 客户端基础实现
+    package "client" <<Rectangle>> {
+        abstract class BaseAdHocDataSourceClient ABSTRACT_COLOR {
+            # baseConnectionParam: BaseConnectionParam
+            # dbType: DbType
+            + getConnection(): Connection
+            + close(): void
+            --
+            【实现逻辑】
+            每次调用都创建新连接
+            不使用连接池
+            适合低频场景
+        }
+        
+        abstract class BasePooledDataSourceClient ABSTRACT_COLOR {
+            # baseConnectionParam: BaseConnectionParam
+            # dataSource: HikariDataSource
+            + createDataSourcePool(params, dbType): HikariDataSource
+            + getConnection(): Connection
+            + close(): void
+            --
+            【实现逻辑】
+            维护 HikariCP 连接池
+            最小连接: 5
+            最大连接: 50
+            连接复用，性能高
+        }
+        
+        note bottom of BasePooledDataSourceClient
+            使用 HikariCP 连接池
+            配置连接池参数
+            从池中获取连接
+        end note
+    }
+    
+    ' 数据源处理器
+    package "datasource" <<Rectangle>> {
+        interface DataSourceProcessor <<SPI扩展点>> INTERFACE_COLOR {
+            + castDatasourceParamDTO(String): BaseDataSourceParamDTO
+            + checkDatasourceParam(BaseDataSourceParamDTO): void
+            + getDatasourceUniqueId(ConnectionParam, DbType): String
+            + createDatasourceParamDTO(String): BaseDataSourceParamDTO
+            + createConnectionParams(BaseDataSourceParamDTO): ConnectionParam
+            + createConnectionParams(String): ConnectionParam
+            + getDatasourceDriver(): String
+            + getValidationQuery(): String
+            + getJdbcUrl(ConnectionParam): String
+            + getConnection(ConnectionParam): Connection
+            + checkDataSourceConnectivity(ConnectionParam): boolean
+            + splitAndRemoveComment(String): List<String>
+            + getDbType(): DbType
+        }
+        
+        abstract class AbstractDataSourceProcessor ABSTRACT_COLOR {
+            # checkDatabasePatter(String): void
+            # checkHost(String): void
+            # checkOther(Map): void
+            + checkDatasourceParam(BaseDataSourceParamDTO): void
+            + getDatasourceUniqueId(ConnectionParam, DbType): String
+            + splitAndRemoveComment(String): List<String>
+            + checkDataSourceConnectivity(ConnectionParam): boolean
+        }
+        
+        class BaseDataSourceParamDTO ABSTRACT_COLOR {
+            # id: int
+            # name: String
+            # note: String
+            # type: DbType
+            # host: String
+            # port: int
+            # database: String
+            # userName: String
+            # password: String
+            # other: Map<String, String>
+        }
+        
+        note right of DataSourceProcessor
+            【适配器模式】
+            适配不同数据库的差异
+            每个数据源提供一个实现
+        end note
+    }
+    
+    ' 工具类
+    package "utils" <<Rectangle>> {
+        class DataSourceUtils CONCRETE_COLOR {
+            + {static} checkDatasourceParam(BaseDataSourceParamDTO): void
+            + {static} buildConnectionParams(BaseDataSourceParamDTO): ConnectionParam
+            + {static} buildConnectionParams(DbType, String): ConnectionParam
+            + {static} getJdbcUrl(DbType, ConnectionParam): String
+            + {static} getConnection(DbType, ConnectionParam): Connection
+            + {static} getDatasourceDriver(DbType): String
+            + {static} getDatasourceProcessor(DbType): DataSourceProcessor
+        }
+        
+        class PasswordUtils CONCRETE_COLOR {
+            + {static} encodePassword(String): String
+            + {static} decodePassword(String): String
+        }
+    }
+}
+
+' ============================================
+' 插件实现示例 (MySQL)
+' ============================================
+package "dolphinscheduler-datasource-mysql" <<Database>> #E8EAF6 {
+    class MySQLDataSourceChannelFactory <<@AutoService>> CONCRETE_COLOR {
+        + getName(): String
+        + create(): DataSourceChannel
+    }
+    
+    class MySQLDataSourceChannel CONCRETE_COLOR {
+        + createAdHocDataSourceClient(...): AdHocDataSourceClient
+        + createPooledDataSourceClient(...): PooledDataSourceClient
+    }
+    
+    class MySQLAdHocDataSourceClient CONCRETE_COLOR {
+        + MySQLAdHocDataSourceClient(params, dbType)
+    }
+    
+    class MySQLPooledDataSourceClient CONCRETE_COLOR {
+        + MySQLPooledDataSourceClient(params, dbType)
+    }
+    
+    class MySQLDataSourceProcessor <<@AutoService>> CONCRETE_COLOR {
+        + getDatasourceDriver(): String
+        + getValidationQuery(): String
+        + getJdbcUrl(ConnectionParam): String
+        + createConnectionParams(BaseDataSourceParamDTO): ConnectionParam
+        + getConnection(ConnectionParam): Connection
+        + getDbType(): DbType
+    }
+    
+    class MySQLConnectionParam CONCRETE_COLOR {
+    }
+}
+
+' ============================================
+' 关系定义
+' ============================================
+
+' SPI 基础层关系
+PrioritySPI <|.. DataSourceChannelFactory
+PrioritySPI --> SPIIdentify
+PrioritySPIFactory --> PrioritySPI : <<discovers>>
+DataSourceChannelFactory ..> DataSourceChannel : <<creates>>
+DataSourceChannel ..> AdHocDataSourceClient : <<creates>>
+DataSourceChannel ..> PooledDataSourceClient : <<creates>>
+DataSourceClient <|-- AdHocDataSourceClient
+DataSourceClient <|-- PooledDataSourceClient
+BaseConnectionParam ..|> ConnectionParam
+
+' DataSource API 层关系
+DataSourcePluginManager --> PrioritySPIFactory : uses
+DataSourcePluginManager --> DataSourceChannelFactory : <<loads>>
+DataSourcePluginManager --> DataSourceChannel : manages
+DataSourceClientProvider --> DataSourcePluginManager : uses
+DataSourceClientProvider ..> DataSourceClient : <<provides>>
+
+AdHocDataSourceClient <|.. BaseAdHocDataSourceClient
+PooledDataSourceClient <|.. BasePooledDataSourceClient
+BaseAdHocDataSourceClient --> DataSourceProcessorProvider : uses
+BasePooledDataSourceClient --> DataSourceUtils : uses
+
+DataSourceProcessor <|.. AbstractDataSourceProcessor
+DataSourceProcessorManager --> DataSourceProcessor : manages
+DataSourceProcessorProvider --> DataSourceProcessorManager : uses
+DataSourceUtils --> DataSourceProcessorProvider : uses
+
+' MySQL 插件实现关系
+DataSourceChannelFactory <|.. MySQLDataSourceChannelFactory
+DataSourceChannel <|.. MySQLDataSourceChannel
+MySQLDataSourceChannelFactory ..> MySQLDataSourceChannel : <<creates>>
+MySQLDataSourceChannel ..> MySQLAdHocDataSourceClient : <<creates>>
+MySQLDataSourceChannel ..> MySQLPooledDataSourceClient : <<creates>>
+
+BaseAdHocDataSourceClient <|-- MySQLAdHocDataSourceClient
+BasePooledDataSourceClient <|-- MySQLPooledDataSourceClient
+
+DataSourceProcessor <|.. MySQLDataSourceProcessor
+AbstractDataSourceProcessor <|-- MySQLDataSourceProcessor
+BaseConnectionParam <|-- MySQLConnectionParam
+
+' ============================================
+' 工作流程图
+' ============================================
+note as WorkflowNote
+    <b>【完整工作流程】</b>
+    
+    <b>1. 系统启动阶段</b>
+    ┌────────────────────────────────────┐
+    │ DataSourcePluginManager            │
+    │   .installPlugin()                 │
+    └───────────┬────────────────────────┘
+                │
+    ┌───────────▼────────────────────────┐
+    │ PrioritySPIFactory                 │
+    │   .load(DataSourceChannelFactory)  │
+    └───────────┬────────────────────────┘
+                │
+    ┌───────────▼────────────────────────┐
+    │ ServiceLoader.load()               │
+    │ 自动发现所有 @AutoService 实现      │
+    └───────────┬────────────────────────┘
+                │
+         ┌──────┴──────┐
+    MySQL Factory  PostgreSQL Factory ...
+         │              │
+    ┌────▼──────────────▼────┐
+    │ 遍历所有 Factory         │
+    │ 调用 create() 创建 Channel│
+    └────┬────────────────────┘
+         │
+    ┌────▼────────────────────┐
+    │ 保存到 datasourceChannelMap│
+    │ {"mysql": MySQLChannel, ...}│
+    └─────────────────────────┘
+    
+    <b>2. 业务使用阶段（Pooled）</b>
+    ┌────────────────────────────────────┐
+    │ 业务代码                            │
+    │   .getPooledConnection(MYSQL, params)│
+    └───────────┬────────────────────────┘
+                │
+    ┌───────────▼────────────────────────┐
+    │ DataSourceClientProvider           │
+    │   1. 检查缓存                       │
+    │   2. 获取 Channel                  │
+    │   3. 创建 Client                   │
+    └───────────┬────────────────────────┘
+                │
+    ┌───────────▼────────────────────────┐
+    │ MySQLDataSourceChannel             │
+    │   .createPooledDataSourceClient()  │
+    └───────────┬────────────────────────┘
+                │
+    ┌───────────▼────────────────────────┐
+    │ MySQLPooledDataSourceClient        │
+    │   1. 创建 HikariDataSource          │
+    │   2. 配置连接池参数                 │
+    └───────────┬────────────────────────┘
+                │
+    ┌───────────▼────────────────────────┐
+    │ client.getConnection()             │
+    │   → pool.getConnection()           │
+    │   → 返回 Connection                │
+    └────────────────────────────────────┘
+    
+    <b>3. 业务使用阶段（AdHoc）</b>
+    ┌────────────────────────────────────┐
+    │ 业务代码                            │
+    │   .getAdHocConnection(MYSQL, params)│
+    └───────────┬────────────────────────┘
+                │
+    ┌───────────▼────────────────────────┐
+    │ DataSourceClientProvider           │
+    │   不使用缓存                        │
+    └───────────┬────────────────────────┘
+                │
+    ┌───────────▼────────────────────────┐
+    │ MySQLDataSourceChannel             │
+    │   .createAdHocDataSourceClient()   │
+    └───────────┬────────────────────────┘
+                │
+    ┌───────────▼────────────────────────┐
+    │ MySQLAdHocDataSourceClient         │
+    │   每次调用都创建新连接              │
+    └───────────┬────────────────────────┘
+                │
+    ┌───────────▼────────────────────────┐
+    │ DataSourceProcessor.getConnection()│
+    │   → DriverManager.getConnection()  │
+    │   → 返回新 Connection              │
+    └────────────────────────────────────┘
+end note
+
+WorkflowNote .. DataSourceClientProvider
+
+' ============================================
+' 设计模式说明
+' ============================================
+note as DesignPatternNote
+    <b>【应用的设计模式】</b>
+    
+    1. <b>SPI 模式</b>
+       ServiceLoader + @AutoService
+       自动发现和加载插件
+    
+    2. <b>工厂模式</b>
+       DataSourceChannelFactory
+       创建 DataSourceChannel
+    
+    3. <b>抽象工厂模式</b>
+       DataSourceChannel
+       创建产品族 (AdHoc + Pooled)
+    
+    4. <b>策略模式</b>
+       AdHoc vs Pooled
+       不同连接获取策略
+    
+    5. <b>单例模式</b>
+       DataSourcePluginManager
+       DataSourceClientProvider
+    
+    6. <b>模板方法模式</b>
+       BasePooledDataSourceClient
+       BaseAdHocDataSourceClient
+    
+    7. <b>适配器模式</b>
+       DataSourceProcessor
+       适配不同数据库
+    
+    8. <b>门面模式</b>
+       DataSourceClientProvider
+       简化客户端调用
+end note
+
+DesignPatternNote .. PrioritySPIFactory
+
+' ============================================
+' 关键特性说明
+' ============================================
+note as FeaturesNote
+    <b>【核心特性】</b>
+    
+    ✅ <b>插件化</b>
+       基于 SPI 机制
+       新增数据源无需修改核心代码
+    
+    ✅ <b>优先级机制</b>
+       支持同名插件覆盖
+       高优先级自动替换低优先级
+    
+    ✅ <b>双策略</b>
+       AdHoc: 临时连接，低频场景
+       Pooled: 连接池，高频场景
+    
+    ✅ <b>连接池管理</b>
+       使用 HikariCP
+       自动配置和优化
+       支持缓存复用
+    
+    ✅ <b>统一抽象</b>
+       数据源访问统一接口
+       参数配置统一模型
+       适配不同数据库差异
+end note
+
+FeaturesNote .. DataSourceChannel
+
+@enduml
+

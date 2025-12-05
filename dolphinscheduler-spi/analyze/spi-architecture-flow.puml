@@ -1,0 +1,126 @@
+@startuml DolphinScheduler-SPI-Flow
+
+skinparam backgroundColor white
+skinparam shadowing false
+
+title DolphinScheduler SPI 核心流程图
+
+' ============================================
+' 垂直流程 - 清晰展示层次
+' ============================================
+
+component [业务代码\n需求: 获取 MySQL 连接(SqlTask)] as Business #FFFDE7
+
+component [DataSourceClientProvider\n门面层\n---\ngetPooledConnection()\ngetAdHocConnection()] as Provider #FFE0B2
+
+rectangle "管理层" #FFF9C4 {
+    component [DataSourcePluginManager\n---\nMap<String, Channel>\nget("mysql")] as PluginMgr
+    
+    component [DataSourceProcessorProvider\n---\nget(DbType)] as ProcessorPvd
+}
+
+rectangle "SPI 契约层" #E3F2FD {
+    component [DataSourceChannel\n---\ncreateAdHocClient()\ncreatePooledClient()] as Channel
+    
+    component [BaseConnectionParam\n---\nuser, password\naddress, database\njdbcUrl, driver] as Params
+}
+
+rectangle "策略实现层" #E8F5E9 {
+    component [BaseAdHocDataSourceClient\n---\ngetConnection():\n1. 获取 Processor\n2. Processor.getConnection()\n3. 返回新连接] as AdHoc #FFCDD2
+    
+    component [BasePooledDataSourceClient\n---\nHikariDataSource pool\n---\ngetConnection():\n1. pool.getConnection()\n2. 返回池化连接] as Pooled #C5E1A5
+}
+
+component [DataSourceProcessor\n处理器层\n---\ngetConnection(params)\ngetJdbcUrl()\ngetValidationQuery()] as Processor #F8BBD0
+
+component [MySQL 插件\nPostgreSQL 插件\nOracle 插件\n... 28种数据源] as Impls #C8E6C9
+
+component [java.sql.Connection\n最终目标] as Conn #B3E5FC
+
+' ============================================
+' 主流程 - 清晰的单向流
+' ============================================
+
+Business -down-> Provider : 1.调用
+
+Provider -down-> PluginMgr : 2.获取 Channel
+
+PluginMgr -down-> Channel : 3.返回
+
+Channel -down-> AdHoc : 4a.创建 AdHoc Client
+Channel -down-> Pooled : 4b.创建 Pooled Client
+
+Channel .right.> Params : 传递参数
+
+AdHoc -down-> ProcessorPvd : 5.获取 Processor
+ProcessorPvd -down-> Processor : 6.返回
+
+Processor -down-> Impls : 7.具体实现
+
+AdHoc -down-> Conn : 8a.返回新连接
+Pooled -down-> Conn : 8b.返回池化连接
+
+Conn -up-> Business : 9.业务使用
+
+' ============================================
+' 注释说明
+' ============================================
+
+note right of Provider
+    【门面模式】
+    业务统一入口
+    
+    只依赖:
+    PluginManager
+end note
+
+note right of PluginMgr
+    【管理器】
+    启动时通过 SPI
+    加载所有 Channel
+    
+    Map 存储:
+    mysql → MySQLChannel
+    postgresql → PGChannel
+end note
+
+note right of AdHoc
+    【临时连接】
+    每次创建新连接
+    
+    依赖 ProcessorProvider
+    适合测试场景
+end note
+
+note right of Pooled
+    【池化连接】
+    维护连接池
+    
+    不需要 Processor
+    适合生产环境
+end note
+
+note right of Processor
+    【适配器】
+    适配不同数据库
+    
+    每个数据源提供
+    一个实现
+end note
+
+legend bottom
+    【核心流程】
+    
+    1. 业务调用 Provider
+    2. Provider 从 PluginManager 获取 Channel
+    3. Channel 根据策略创建 Client
+    4. AdHoc Client 通过 Processor 创建连接
+    5. Pooled Client 从连接池获取连接
+    6. 返回 Connection 给业务使用
+    
+    【两种路径】
+    AdHoc: Business → Provider → Channel → AdHoc → Processor → Connection
+    Pooled: Business → Provider → Channel → Pooled → Connection
+endlegend
+
+@enduml

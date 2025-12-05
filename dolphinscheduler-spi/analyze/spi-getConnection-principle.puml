@@ -1,0 +1,625 @@
+@startuml GetConnection-Architecture-Principle
+
+skinparam packageStyle rectangle
+skinparam backgroundColor white
+skinparam shadowing false
+
+title 围绕 getConnection() 的架构原理与灵活性
+
+' ============================================
+' 核心原理说明
+' ============================================
+note as PrincipleNote
+    【核心设计原理】
+
+    1. 分离关注点
+    • SPI 层：定义契约（What）
+    • API 层：提供实现（How）
+    • Plugin 层：具体适配（Adapt）
+
+    2. 双路径策略
+    • AdHoc 路径：直接获取连接
+    • Pooled 路径：连接池管理
+
+    3. 灵活性体现
+    • 数据源可插拔
+    • 连接策略可选择
+    • 实现方式可定制
+
+    4. 最终目标
+    java.sql.Connection
+end note
+
+' ============================================
+' 业务层
+' ============================================
+package "业务代码层" as BusinessLayer #F5F5F5 {
+    component [业务代码] as BusinessCode #FFECB3
+
+    note right of BusinessCode
+        两种调用方式
+
+        1. 池化连接（高频）:
+        Connection conn =
+          DataSourceClientProvider
+            .getPooledConnection(
+              DbType.MYSQL, params)
+
+        2. 临时连接（低频）:
+        Connection conn =
+          DataSourceClientProvider
+            .getAdHocConnection(
+              DbType.MYSQL, params)
+    end note
+}
+
+' ============================================
+' API 层 - 门面与策略选择
+' ============================================
+package "dolphinscheduler-datasource-api\n【API 实现层】" as APILayer #FFF3E0 {
+    
+    package "管理层" {
+        component [DataSourcePluginManager\n数据源插件管理器\n---\ndatasourceChannelMap\ninstallPlugin()\ngetDataSourceChannelMap()] as PluginManager #FFB74D
+        
+        component [DataSourceProcessorManager\n处理器管理器\n---\ndataSourceProcessorMap\ninstallProcessor()\ngetDataSourceProcessorMap()] as ProcessorManager #FF9800
+        
+        component [DataSourceClientProvider\n客户端提供者(门面)\n---\ngetPooledConnection()\ngetAdHocConnection()\ngetPooledClient()\ngetAdHocClient()] as Provider #FFECB3
+        
+        component [DataSourceProcessorProvider\n处理器提供者\n---\ngetDataSourceProcessor()\ngetDataSourceProcessorMap()] as ProcessorProvider #FFA726
+        
+        note right of PluginManager
+            【职责】
+            1. 使用 PrioritySPIFactory 加载
+               DataSourceChannelFactory
+            2. 调用 Factory.create() 创建 Channel
+            3. 维护 Map<String, DataSourceChannel>
+            4. 提供 Channel 查询
+        end note
+        
+        note right of ProcessorManager
+            【职责】
+            1. 使用 PrioritySPIFactory 加载
+               DataSourceProcessor
+            2. 维护 Map<String, DataSourceProcessor>
+            3. 提供 Processor 查询
+        end note
+        
+        note left of Provider
+            【门面模式】
+            业务代码统一入口
+            隐藏内部复杂性
+            提供简化的 API
+            
+            只依赖:
+            • DataSourcePluginManager
+              (获取 DataSourceChannel)
+            
+            不直接依赖:
+            • DataSourceProcessorProvider
+              (由 Client 内部调用)
+        end note
+        
+        note left of ProcessorProvider
+            【单例提供者】
+            提供全局访问点
+            获取对应的 Processor
+        end note
+    }
+    
+    package "策略层" {
+        component [DataSourceChannel\n通道接口] as Channel
+        
+        note right of Channel
+            【抽象工厂】
+            创建不同策略的客户端
+            
+            createAdHocClient()
+            createPooledClient()
+        end note
+    }
+
+    package "客户端层 - 两种策略" {
+
+        ' AdHoc 路径
+        rectangle "AdHoc 策略（临时连接）" as AdHocPath #E8F5E9 {
+            component [AdHocDataSourceClient\n临时客户端] as AdHocClient
+            component [BaseAdHocDataSourceClient\n基础实现] as BaseAdHoc
+
+            note bottom of BaseAdHoc
+                【实现逻辑】
+                getConnection():
+                1. 调用 DataSourceProcessorProvider
+                   获取对应的 Processor
+                2. Processor.getConnection(params)
+                3. DriverManager.getConnection()
+                4. 返回新连接
+                
+                特点:
+                • 每次都创建新连接
+                • 不使用连接池
+                • 资源即用即销毁
+                • 适合测试和低频场景
+                
+                依赖:
+                → DataSourceProcessorProvider
+            end note
+        }
+
+        ' Pooled 路径
+        rectangle "Pooled 策略（池化连接）" as PooledPath #FFF3E0 {
+            component [PooledDataSourceClient\n池化客户端] as PooledClient
+            component [BasePooledDataSourceClient\n基础实现] as BasePooled
+            component [HikariDataSource\n连接池] as Hikari
+
+            note bottom of BasePooled
+                【实现逻辑】
+                getConnection():
+                1. 维护 HikariCP 连接池
+                2. 从池中获取连接
+                3. 连接复用
+                4. 返回池化连接
+
+                特点:
+                • 连接池管理
+                • 连接复用
+                • 性能优化
+                • 适合生产和高频场景
+            end note
+        }
+    }
+
+    package "处理器层 - 核心抽象" {
+        component [DataSourceProcessor\n数据源处理器] as Processor #FCE4EC
+
+        note right of Processor
+            【适配器模式 + 策略模式】
+
+            核心方法:
+            • getConnection(params)
+            • getJdbcUrl(params)
+            • getDatasourceDriver()
+            • getValidationQuery()
+
+            职责:
+            适配不同数据库的差异
+            提供统一的连接获取接口
+        end note
+    }
+}
+
+' ============================================
+' SPI 层 - 契约定义
+' ============================================
+package "dolphinscheduler-spi\n【SPI 契约层】" as SPILayer #E3F2FD {
+    
+    package "SPI 插件机制" {
+        component [PrioritySPI\nSPI 基础接口\n---\ngetIdentify(): SPIIdentify\ncompareTo(Integer): int] as PrioritySPI #2196F3
+        
+        component [SPIIdentify\n插件标识\n---\nname: String\npriority: int] as SPIIdentify #1976D2
+        
+        component [PrioritySPIFactory\nSPI 加载器\n---\nload(Class): Map\ngetSPIMap(): Map\nresolveConflict()] as SPIFactory #42A5F5
+        
+        note right of PrioritySPI
+            【SPI 核心】
+            所有 SPI 插件的基础接口
+            
+            提供功能:
+            • 插件标识 (name + priority)
+            • 优先级比较
+            • 支持同名插件覆盖
+        end note
+        
+        note right of SPIFactory
+            【SPI 加载器】
+            通过 ServiceLoader 自动发现插件
+            
+            工作流程:
+            1. ServiceLoader.load(spiClass)
+            2. 遍历所有实现
+            3. 处理优先级冲突
+            4. 返回 Map<name, instance>
+        end note
+    }
+    
+    package "数据源 SPI 扩展点" {
+        component [DataSourceChannelFactory\nChannel 工厂接口\n---\ngetName(): String\ncreate(): DataSourceChannel\ngetIdentify(): SPIIdentify] as ChannelFactory #64B5F6
+        
+        component [DataSourceChannel\n数据源通道接口\n---\ncreateAdHocClient()\ncreatePooledClient()] as IChannel #5C6BC0
+        
+        note left of ChannelFactory
+            【SPI 扩展点】
+            继承 PrioritySPI
+            每个数据源提供一个实现
+            通过 @AutoService 自动注册
+        end note
+        
+        note left of IChannel
+            【抽象工厂】
+            创建两种策略的客户端
+            
+            AdHoc: 临时连接
+            Pooled: 池化连接
+        end note
+    }
+    
+    package "客户端接口定义" {
+        component [DataSourceClient\n客户端接口\n---\ngetConnection(): Connection\nclose(): void] as DSClient #BBDEFB
+        
+        component [AdHocDataSourceClient\n临时客户端接口] as IAdHoc #90CAF9
+        
+        component [PooledDataSourceClient\n池化客户端接口\n---\ncreateDataSourcePool(): DataSource] as IPooled #90CAF9
+        
+        note bottom of DSClient
+            【契约定义】
+            定义所有客户端必须实现的接口
+            getConnection() 是核心方法
+            
+            无论哪种策略，最终都要返回
+            java.sql.Connection
+        end note
+    }
+    
+    package "连接参数定义" {
+        component [ConnectionParam\n连接参数接口] as IConnectionParam #80DEEA
+        
+        component [BaseConnectionParam\n连接参数基类\n---\nuser: String\npassword: String\naddress: String\ndatabase: String\njdbcUrl: String\ndriverClassName: String\nvalidationQuery: String\nother: Map] as BaseConnParam #4DD0E1
+        
+        note bottom of BaseConnParam
+            【参数封装】
+            封装数据库连接所需的所有参数
+            
+            支持:
+            • 基础连接信息
+            • JDBC 配置
+            • 扩展参数 (other Map)
+            
+            用途:
+            被所有数据源插件使用
+        end note
+    }
+}
+
+' ============================================
+' 插件实现层 - MySQL 示例
+' ============================================
+package "dolphinscheduler-datasource-mysql\n【MySQL 插件实现】" as MySQLPlugin #E8F5E9 {
+
+    component [MySQLDataSourceChannel\nMySQL 通道] as MySQLChannel
+
+    component [MySQLAdHocDataSourceClient\nMySQL 临时客户端] as MySQLAdHoc
+
+    component [MySQLPooledDataSourceClient\nMySQL 池化客户端] as MySQLPooled
+
+    component [MySQLDataSourceProcessor\nMySQL 处理器] as MySQLProcessor #FCE4EC
+
+    note bottom of MySQLProcessor
+        【MySQL 特定实现】
+
+        getConnection(params):
+        public Connection getConnection(ConnectionParam params) {
+            Class.forName("com.mysql.cj.jdbc.Driver");
+            String url = "jdbc:mysql://host:port/db" +
+                         "?useUnicode=true" +
+                         "&characterEncoding=UTF-8";
+            return DriverManager.getConnection(
+                url,
+                params.getUser(),
+                params.getPassword()
+            );
+        }
+
+        getValidationQuery(): "SELECT 1"
+        getDatasourceDriver(): "com.mysql.cj.jdbc.Driver"
+    end note
+}
+
+' ============================================
+' 其他数据源示例
+' ============================================
+package "其他数据源插件" as OtherPlugins #F5F5F5 {
+    component [PostgreSQLDataSourceProcessor] as PGProcessor
+    component [OracleDataSourceProcessor] as OracleProcessor
+    component [ClickHouseDataSourceProcessor] as ClickHouseProcessor
+    component [... 25 种其他数据源] as MoreProcessors
+
+    note bottom of PGProcessor
+        PostgreSQL 特定实现
+        getValidationQuery(): "SELECT 1"
+    end note
+
+    note bottom of OracleProcessor
+        Oracle 特定实现
+        getValidationQuery(): "SELECT 1 FROM DUAL"
+    end note
+}
+
+' ============================================
+' 最终目标
+' ============================================
+database "数据库" as Database {
+    component [MySQL Database] as MySQL
+    component [PostgreSQL Database] as PostgreSQL
+    component [Oracle Database] as Oracle
+    component [...] as MoreDB
+}
+
+component [java.sql.Connection\n最终目标] as FinalConnection #FFECB3
+
+' ============================================
+' 关系连线
+' ============================================
+
+' 业务层调用
+BusinessCode --> Provider : 调用
+
+' Provider 与管理器关系
+Provider --> PluginManager : 使用\n获取 Channel
+
+' PluginManager 工作流程
+PluginManager --> SPIFactory : 1.使用加载器
+SPIFactory --> ChannelFactory : 2.发现所有Factory
+ChannelFactory --> IChannel : 3.create()创建
+PluginManager --> IChannel : 4.管理Map<String, Channel>
+
+' ProcessorManager 工作流程
+ProcessorManager --> SPIFactory : 1.使用加载器
+ProcessorManager --> Processor : 2.管理Map<String, Processor>
+ProcessorProvider --> ProcessorManager : 3.依赖获取
+
+' Client 使用 ProcessorProvider
+BaseAdHoc --> ProcessorProvider : 内部调用\n获取 Processor
+
+' Channel 使用参数
+IChannel ..> BaseConnParam : 使用\n创建Client时传递
+
+' Processor 使用参数
+Processor ..> BaseConnParam : 使用\ngetConnection()时
+
+' Provider 分发策略
+Provider --> Channel : 获取通道
+Channel -down-> AdHocClient : 策略1:\n创建临时客户端
+Channel -down-> PooledClient : 策略2:\n创建池化客户端
+
+' SPI 基础关系
+PrioritySPI --> SPIIdentify : 使用
+SPIFactory --> PrioritySPI : 加载所有实现
+PrioritySPI <|-- ChannelFactory : 继承
+ChannelFactory --> IChannel : 创建
+IChannel --> IAdHoc : 创建
+IChannel --> IPooled : 创建
+
+' 连接参数关系
+IConnectionParam <|-- BaseConnParam : 实现
+BaseConnParam --> IChannel : 传递参数
+BaseConnParam --> Processor : 传递参数
+
+' 客户端接口实现关系
+DSClient <|-- IAdHoc
+DSClient <|-- IPooled
+IAdHoc <|.. BaseAdHoc
+IPooled <|.. BasePooled
+BaseAdHoc <|-- AdHocClient
+BasePooled <|-- PooledClient
+
+' AdHoc 路径
+AdHocClient -[#FF6B6B,bold]-> Processor : 直接调用\ngetConnection()
+
+' Pooled 路径
+PooledClient -down-> Hikari : 维护连接池
+Hikari -[#4CAF50,bold]-> Processor : 初始化时调用\ngetConnection()
+
+' Processor 到具体实现
+Processor <|.. MySQLProcessor
+Processor <|.. PGProcessor
+Processor <|.. OracleProcessor
+Processor <|.. ClickHouseProcessor
+
+' ProcessorManager 管理 Processor
+ProcessorManager --> Processor : 管理\nMap<String, Processor>
+
+' ProcessorProvider 与 Processor 关系
+ProcessorProvider --> Processor : 提供
+
+' SPI 机制
+ChannelFactory -up-> Channel : 创建
+
+' MySQL 实现
+MySQLChannel --> MySQLAdHoc : 创建
+MySQLChannel --> MySQLPooled : 创建
+BaseAdHoc <|-- MySQLAdHoc
+BasePooled <|-- MySQLPooled
+
+' 处理器到数据库
+MySQLProcessor -[#2196F3,bold]-> MySQL : 建立连接
+PGProcessor --> PostgreSQL
+OracleProcessor --> Oracle
+
+' 最终连接
+AdHocClient -[#FF6B6B,bold]-> FinalConnection : 返回新连接
+PooledClient -[#4CAF50,bold]-> FinalConnection : 返回池化连接
+FinalConnection --> BusinessCode : 业务使用
+
+' ============================================
+' 完整调用路径说明
+' ============================================
+note as CallPathNote
+    【完整调用路径】
+
+    路径 1: AdHoc 临时连接
+    ┌──────────────────────────────────────────────────┐
+    │ 业务代码                                          │
+    │   ↓ getAdHocConnection()                         │
+    │ DataSourceClientProvider                         │
+    │   ↓ 获取通道                                      │
+    │ MySQLDataSourceChannel                           │
+    │   ↓ createAdHocClient()                          │
+    │ MySQLAdHocDataSourceClient                       │
+    │   ↓ getConnection()                              │
+    │ MySQLDataSourceProcessor                         │
+    │   ↓ getConnection(params)                        │
+    │ DriverManager.getConnection()                    │
+    │   ↓ 建立 TCP 连接                                 │
+    │ MySQL Database                                   │
+    │   ↓ 返回                                          │
+    │ Connection (新连接)                              │
+    └──────────────────────────────────────────────────┘
+
+    路径 2: Pooled 池化连接
+    ┌──────────────────────────────────────────────────┐
+    │ 业务代码                                          │
+    │   ↓ getPooledConnection()                        │
+    │ DataSourceClientProvider                         │
+    │   ↓ 检查缓存/获取通道                             │
+    │ MySQLDataSourceChannel                           │
+    │   ↓ createPooledClient()                         │
+    │ MySQLPooledDataSourceClient                      │
+    │   ↓ 构造函数初始化                                │
+    │ HikariDataSource.new()                           │
+    │   ↓ 初始化连接池（调用 Processor）                │
+    │ MySQLDataSourceProcessor                         │
+    │   ↓ getConnection(params)                        │
+    │ 创建初始连接 → 加入连接池                          │
+    │   ↓ 业务使用时                                    │
+    │ MySQLPooledDataSourceClient.getConnection()      │
+    │   ↓ 从池中获取                                    │
+    │ HikariDataSource.getConnection()                 │
+    │   ↓ 返回                                          │
+    │ Connection (池化连接)                            │
+    └──────────────────────────────────────────────────┘
+end note
+
+CallPathNote .. FinalConnection
+
+' ============================================
+' 灵活性体现
+' ============================================
+note as ManagerRelationNote
+    【四大管理器协作关系】
+    
+    1. DataSourcePluginManager (数据源插件管理器)
+       ┌──────────────────────────────────────┐
+       │ 职责: 管理 DataSourceChannel         │
+       │ 启动时: installPlugin()              │
+       │   ↓                                  │
+       │ 使用 PrioritySPIFactory 加载         │
+       │   DataSourceChannelFactory           │
+       │   ↓                                  │
+       │ 调用 Factory.create() 创建 Channel   │
+       │   ↓                                  │
+       │ 保存到 Map<String, Channel>          │
+       └──────────────────────────────────────┘
+    
+    2. DataSourceProcessorManager (处理器管理器)
+       ┌──────────────────────────────────────┐
+       │ 职责: 管理 DataSourceProcessor       │
+       │ 启动时: installProcessor()           │
+       │   ↓                                  │
+       │ 使用 PrioritySPIFactory 加载         │
+       │   DataSourceProcessor                │
+       │   ↓                                  │
+       │ 保存到 Map<String, Processor>        │
+       └──────────────────────────────────────┘
+    
+    3. DataSourceClientProvider (客户端提供者)
+       ┌──────────────────────────────────────┐
+       │ 职责: 业务代码的统一入口(门面)       │
+       │ 直接依赖: DataSourcePluginManager    │
+       │ 缓存: PooledDataSourceClient         │
+       │   ↓                                  │
+       │ getPooledConnection()                │
+       │   → PluginManager.get("mysql")       │
+       │   → Channel.createPooledClient()     │
+       │   ↓                                  │
+       │ getAdHocConnection()                 │
+       │   → PluginManager.get("mysql")       │
+       │   → Channel.createAdHocClient()      │
+       │   ↓                                  │
+       │ 不直接依赖 ProcessorProvider         │
+       │ (由 Client 内部调用)                 │
+       └──────────────────────────────────────┘
+    
+    4. DataSourceProcessorProvider (处理器提供者)
+       ┌──────────────────────────────────────┐
+       │ 职责: 提供 Processor 访问点          │
+       │ 依赖: DataSourceProcessorManager     │
+       │ 被调用: BaseAdHocDataSourceClient    │
+       │   ↓                                  │
+       │ getDataSourceProcessor(DbType)       │
+       │   → ProcessorManager.get("MYSQL")    │
+       │   → 返回 MySQLDataSourceProcessor    │
+       └──────────────────────────────────────┘
+    
+    【协作流程】
+    系统启动:
+      PluginManager.installPlugin()
+        → SPIFactory.load(ChannelFactory.class)
+        → 创建所有 Channel
+      
+      ProcessorManager.installProcessor()
+        → SPIFactory.load(Processor.class)
+        → 注册所有 Processor
+    
+    业务调用 (AdHoc 路径):
+      1. Provider.getAdHocConnection()
+      2. → PluginManager.get("mysql") → Channel
+      3. → Channel.createAdHocClient() → Client
+      4. → Client.getConnection()
+      5.   → ProcessorProvider.get(dbType) → Processor
+      6.   → Processor.getConnection(params)
+      7.   → Connection
+    
+    业务调用 (Pooled 路径):
+      1. Provider.getPooledConnection()
+      2. → PluginManager.get("mysql") → Channel
+      3. → Channel.createPooledClient() → Client
+      4. → Client 构造时初始化 HikariDataSource
+      5. → Client.getConnection()
+      6.   → pool.getConnection()
+      7.   → Connection
+      
+    关键: ProcessorProvider 由 Client 调用，
+         不是 Provider 调用
+end note
+
+note as FlexibilityNote
+    【灵活性体现】
+    
+    1. 数据源可插拔
+    • 新增数据源只需实现 DataSourceProcessor
+    • 实现 getConnection() 等方法
+    • 通过 @AutoService 自动注册
+    • 无需修改核心代码
+    
+    2. 连接策略可选择
+    • AdHoc: 适合测试、低频场景
+    • Pooled: 适合生产、高频场景
+    • 业务代码根据需求选择
+    
+    3. 实现方式可定制
+    • 每个数据源可定制 getConnection()
+    • 可适配特殊的连接方式
+    • 可添加自定义逻辑
+    
+    4. 连接池可配置
+    • HikariCP 参数可调整
+    • 子类可覆盖配置方法
+    • 支持不同场景优化
+    
+    5. 优先级可覆盖
+    • 同名插件支持优先级
+    • 可替换默认实现
+    • 支持增强和扩展
+    
+    【关键设计】
+    getConnection() 是整个架构的核心
+    • SPI 层定义契约
+    • API 层提供策略
+    • Plugin 层具体实现
+    • 三层协作，职责清晰
+end note
+
+ManagerRelationNote .. PluginManager
+FlexibilityNote .. Processor
+
+@enduml
+

@@ -1,0 +1,94 @@
+@startuml DolphinScheduler-SPI-Workflow
+
+!theme plain
+skinparam backgroundColor white
+skinparam shadowing false
+
+title DolphinScheduler SPI & DataSource 工作流程时序图
+
+' ============================================
+' 系统启动流程
+' ============================================
+== 系统启动阶段 ==
+
+participant "应用启动" as App
+participant "DataSourcePluginManager" as Manager
+participant "PrioritySPIFactory" as Factory
+participant "ServiceLoader" as Loader
+participant "MySQLDataSourceChannelFactory" as MySQLFactory
+participant "PostgreSQLDataSourceChannelFactory" as PGFactory
+participant "MySQLDataSourceChannel" as MySQLChannel
+participant "PostgreSQLDataSourceChannel" as PGChannel
+
+App -> Manager: installPlugin()
+activate Manager
+
+Manager -> Factory: new PrioritySPIFactory(\n  DataSourceChannelFactory.class)
+activate Factory
+
+Factory -> Loader: ServiceLoader.load(\n  DataSourceChannelFactory.class)
+activate Loader
+
+note right of Loader
+    扫描 META-INF/services/
+    org.apache.dolphinscheduler.spi.
+    datasource.DataSourceChannelFactory
+end note
+
+Loader --> Factory: 返回所有实现类迭代器
+deactivate Loader
+
+Factory -> MySQLFactory: 发现 MySQLDataSourceChannelFactory
+activate MySQLFactory
+MySQLFactory --> Factory: 返回实例
+deactivate MySQLFactory
+
+Factory -> PGFactory: 发现 PostgreSQLDataSourceChannelFactory
+activate PGFactory
+PGFactory --> Factory: 返回实例
+deactivate PGFactory
+
+note over Factory
+    <b>处理优先级冲突</b>
+    - 同名同优先级: 抛异常
+    - 同名不同优先级: 保留高优先级
+end note
+
+Factory --> Manager: getSPIMap()
+deactivate Factory
+
+loop 遍历所有 Factory
+    Manager -> MySQLFactory: create()
+    activate MySQLFactory
+    MySQLFactory -> MySQLChannel: new MySQLDataSourceChannel()
+    activate MySQLChannel
+    MySQLChannel --> MySQLFactory: 返回实例
+    deactivate MySQLChannel
+    MySQLFactory --> Manager: 返回 MySQLDataSourceChannel
+    deactivate MySQLFactory
+    
+    Manager -> PGFactory: create()
+    activate PGFactory
+    PGFactory -> PGChannel: new PostgreSQLDataSourceChannel()
+    activate PGChannel
+    PGChannel --> PGFactory: 返回实例
+    deactivate PGChannel
+    PGFactory --> Manager: 返回 PostgreSQLDataSourceChannel
+    deactivate PGFactory
+end
+
+note over Manager
+    <b>保存到 Map</b>
+    datasourceChannelMap:
+    {
+      "mysql": MySQLDataSourceChannel,
+      "postgresql": PostgreSQLDataSourceChannel,
+      ... 28种数据源
+    }
+end note
+
+Manager --> App: 插件安装完成
+deactivate Manager
+
+@enduml
+

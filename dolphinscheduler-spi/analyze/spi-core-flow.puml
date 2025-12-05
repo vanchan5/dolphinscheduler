@@ -1,0 +1,90 @@
+@startuml DolphinScheduler-SPI-Core-Flow
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultTextAlignment center
+
+title DolphinScheduler SPI 核心流程 (极简版)
+
+' ============================================
+' 核心流程 - 最简化
+' ============================================
+
+:业务代码;
+note right
+    Connection conn = 
+    DataSourceClientProvider
+        .getPooledConnection(
+            DbType.MYSQL, params)
+end note
+
+partition "门面层" {
+    :DataSourceClientProvider\n(统一入口);
+}
+
+partition "管理层" {
+    :DataSourcePluginManager\n获取 Channel;
+    note right
+        Map<String, Channel>
+        get("mysql") → MySQLChannel
+    end note
+}
+
+partition "通道层" {
+    :DataSourceChannel\n创建客户端;
+    
+    if (连接策略?) then (AdHoc)
+        :创建 AdHocClient;
+        note right
+            临时连接
+            即用即销毁
+        end note
+    else (Pooled)
+        :创建 PooledClient;
+        note right
+            池化连接
+            HikariCP
+        end note
+    endif
+}
+
+partition "客户端层" {
+    if (AdHoc?) then (是)
+        :BaseAdHocDataSourceClient;
+        
+        partition "获取 Processor" {
+            :DataSourceProcessorProvider;
+            :DataSourceProcessor;
+            :DriverManager.getConnection();
+        }
+        
+        :返回新连接;
+        
+    else (否 - Pooled)
+        :BasePooledDataSourceClient;
+        :HikariDataSource.getConnection();
+        :返回池化连接;
+    endif
+}
+
+:java.sql.Connection;
+
+:业务使用连接;
+
+stop
+
+legend right
+    核心组件:
+    • Provider: 门面
+    • PluginManager: 管理 Channel
+    • Channel: 创建 Client
+    • Client: 获取连接
+    • Processor: 适配数据库
+    
+    两种路径:
+    • AdHoc: 每次新建
+    • Pooled: 连接池
+endlegend
+
+@enduml
+

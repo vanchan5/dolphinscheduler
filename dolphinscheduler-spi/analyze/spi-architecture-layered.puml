@@ -1,0 +1,156 @@
+@startuml DolphinScheduler-SPI-Layered
+
+skinparam backgroundColor white
+skinparam shadowing false
+
+title DolphinScheduler SPI 分层架构图
+
+' ============================================
+' 横向分层 - 清晰展示层次结构
+' ============================================
+
+package "【第1层】业务层" #FFFDE7 {
+    [业务代码] as Business
+}
+
+package "【第2层】门面层 - API 入口" #FFE0B2 {
+    [DataSourceClientProvider] as Provider
+}
+
+package "【第3层】管理层 - 资源管理" #FFF3E0 {
+    [DataSourcePluginManager\n管理 Channel] as PluginMgr
+    [DataSourceProcessorProvider\n提供 Processor] as ProcessorPvd
+}
+
+package "【第4层】SPI 契约层 - 定义规范" #E3F2FD {
+    
+    rectangle "SPI 机制" {
+        [PrioritySPI\n基础接口] as PrioritySPI
+        [PrioritySPIFactory\n加载器] as SPIFactory
+    }
+    
+    rectangle "数据源抽象" {
+        [DataSourceChannelFactory\n工厂] as Factory
+        [DataSourceChannel\n通道] as Channel
+        [BaseConnectionParam\n参数] as Param
+    }
+    
+    rectangle "客户端抽象" {
+        [DataSourceClient] as Client
+        [AdHocClient接口] as IAdHoc
+        [PooledClient接口] as IPooled
+    }
+}
+
+package "【第5层】实现层 - 通用实现" #E8F5E9 {
+    [BaseAdHocDataSourceClient\n临时客户端基类] as BaseAdHoc
+    [BasePooledDataSourceClient\n池化客户端基类] as BasePooled
+    [DataSourceProcessor\n处理器接口] as Processor
+}
+
+package "【第6层】插件层 - 具体适配" #F3E5F5 {
+    [MySQL 插件\nPostgreSQL 插件\nOracle 插件\n... 28种数据源] as Plugins
+}
+
+' ============================================
+' 核心流程 - 自上而下
+' ============================================
+
+Business --> Provider
+Provider --> PluginMgr
+PluginMgr --> Channel
+Channel --> BaseAdHoc : AdHoc路径
+Channel --> BasePooled : Pooled路径
+BaseAdHoc --> ProcessorPvd
+ProcessorPvd --> Processor
+Processor --> Plugins
+BasePooled --> Plugins
+
+' SPI 加载关系
+PluginMgr .up.> SPIFactory
+ProcessorPvd .up.> SPIFactory
+
+' ============================================
+' 分层说明
+' ============================================
+
+note right of Business
+    业务层
+    ====
+    开发者编写的业务逻辑
+    只需调用 Provider API
+end note
+
+note right of Provider
+    门面层
+    ====
+    统一入口，简化调用
+    隐藏底层复杂性
+end note
+
+note right of PluginMgr
+    管理层
+    ====
+    管理所有资源
+    启动时加载插件
+end note
+
+note right of Channel
+    SPI 契约层
+    ====
+    定义接口规范
+    不包含具体实现
+    支持插件扩展
+end note
+
+note right of BaseAdHoc
+    实现层
+    ====
+    提供通用实现
+    封装共性逻辑
+end note
+
+note right of Plugins
+    插件层
+    ====
+    适配具体数据库
+    可插拔扩展
+    28种数据源
+end note
+
+' ============================================
+' 核心流程总结
+' ============================================
+
+legend bottom
+    【核心流程总结】
+    
+    1. 系统启动:
+       • PrioritySPIFactory 自动发现所有插件
+       • PluginManager 管理所有 Channel
+       • ProcessorProvider 管理所有 Processor
+    
+    2. 业务调用:
+       • 调用 Provider.getConnection()
+       • Provider 从 PluginManager 获取 Channel
+       • Channel 根据策略创建 Client (AdHoc/Pooled)
+       • Client 获取连接
+    
+    3. AdHoc 路径:
+       Business → Provider → PluginMgr → Channel 
+       → AdHoc Client → ProcessorProvider → Processor 
+       → Connection
+    
+    4. Pooled 路径:
+       Business → Provider → PluginMgr → Channel 
+       → Pooled Client → HikariDataSource 
+       → Connection
+    
+    设计优势:
+    • 分层清晰，职责明确
+    • 插件可插拔，易于扩展
+    • 双策略，适配不同场景
+endlegend
+
+@enduml
+
