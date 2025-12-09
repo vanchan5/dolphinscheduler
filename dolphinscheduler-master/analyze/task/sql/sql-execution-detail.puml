@@ -1,0 +1,77 @@
+@startuml SQL执行详细流程
+!theme plain
+title SQL 任务执行详细流程
+
+start
+
+:Worker 线程池执行任务;
+
+partition "初始化阶段" {
+    :创建 SqlTask 对象;
+    :解析 TaskParams\n(JSON → SqlParameters);
+    :验证参数\n(checkParameters);
+    :生成扩展上下文\n(包含数据源连接信息);
+    :获取数据库类型\n(DbType);
+}
+
+partition "SQL 准备阶段" {
+    :构建连接参数\n(buildConnectionParams);
+    :分割 SQL 语句\n(splitAndRemoveComment);
+    note right: 支持多语句\n以 ;\n 分隔
+    
+    :处理主 SQL 参数替换;
+    note right
+        1. 替换调度时间: $[yyyyMMddHHmmss]
+        2. 替换自定义参数: ${variable}
+        3. 替换原始值: !{variable}
+        4. 处理列表参数
+    end note
+    
+    :处理前置 SQL 参数替换;
+    :处理后置 SQL 参数替换;
+}
+
+partition "SQL 执行阶段" {
+    :获取数据库连接\n(getAdHocConnection);
+    
+    :执行前置 SQL\n(executeUpdate);
+    
+    if (SQL 类型?) then (查询 QUERY)
+        :准备 PreparedStatement;
+        :绑定参数;
+        :设置查询超时;
+        :设置最大行数;
+        :执行查询\n(executeQuery);
+        :获取 ResultSet;
+        :处理结果集;
+        note right
+            1. 转换为 JSON 数组
+            2. 限制显示行数
+            3. 准备邮件附件(可选)
+        end note
+    else (非查询 NON_QUERY)
+        :准备 PreparedStatement;
+        :绑定参数;
+        :执行更新\n(executeUpdate);
+        :获取影响行数;
+        :处理输出参数;
+    endif
+    
+    :处理输出参数\n(dealOutParam);
+    note right: 将结果写入 varPool
+    
+    :执行后置 SQL\n(executeUpdate);
+    
+    :关闭数据库连接;
+}
+
+partition "结果处理阶段" {
+    :设置退出状态码\n(EXIT_CODE_SUCCESS);
+    :发送任务成功事件;
+    :更新任务状态;
+}
+
+stop
+
+@enduml
+

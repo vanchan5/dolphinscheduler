@@ -1,0 +1,83 @@
+@startuml SQL任务调度流程
+!theme plain
+title SQL 任务调度流程
+
+actor User as 用户
+participant "UI" as UI
+participant "API Service" as API
+participant "Master" as Master
+participant "Worker" as Worker
+participant "Database" as DB
+participant "External DB" as ExtDB
+
+== 任务创建阶段 ==
+用户 -> UI: 创建 SQL 任务
+UI -> API: POST /workflow/definition
+API -> DB: 保存任务定义
+DB --> API: 返回任务 ID
+API --> UI: 返回成功
+UI --> 用户: 显示创建成功
+
+== 工作流触发阶段 ==
+用户 -> UI: 运行工作流
+UI -> API: POST /workflow/instance/run
+API -> Master: 创建工作流实例
+Master -> DB: 保存工作流实例
+Master -> Master: 创建工作流执行 Runnable
+Master -> Master: 提交到线程池
+
+== 任务实例创建阶段 ==
+Master -> Master: 检查任务依赖
+Master -> DB: 创建任务实例\n(state: SUBMITTED_SUCCESS)
+Master -> Master: 提交到调度队列
+
+== 任务调度阶段 ==
+loop 任务调度循环
+    Master -> Master: 从队列获取任务
+    Master -> Master: 负载均衡选择 Worker
+    Master -> Master: 更新任务状态\nRUNNING_EXEUTION
+    Master -> Worker: RPC 调用\ndispatchTask()
+    
+    Worker -> Worker: 创建 WorkerTaskExecutor
+    Worker -> Worker: 提交到线程池
+    Worker --> Master: 返回分发成功
+    
+    Worker -> Master: 发送 DISPATCHED 事件
+    Master --> Worker: 返回 ACK
+    
+    == SQL 执行阶段 ==
+    Worker -> Worker: 创建 SqlTask 对象
+    Worker -> Worker: 解析任务参数
+    Worker -> Worker: 构建数据源连接参数
+    Worker -> ExtDB: 建立数据库连接
+    Worker -> Worker: 处理参数替换
+    Worker -> Worker: 执行前置 SQL
+    alt SQL 类型 = 查询
+        Worker -> ExtDB: 执行查询 SQL
+        ExtDB --> Worker: 返回结果集
+        Worker -> Worker: 处理结果集\n(转换为 JSON)
+    else SQL 类型 = 非查询
+        Worker -> ExtDB: 执行更新 SQL
+        ExtDB --> Worker: 返回影响行数
+    end
+    Worker -> Worker: 执行后置 SQL
+    Worker -> ExtDB: 关闭数据库连接
+    
+    Worker -> Master: 发送 RUNNING 事件
+    Master --> Worker: 返回 ACK
+    
+    Worker -> Master: 发送 SUCCESS 事件
+    Master -> DB: 更新任务状态\nSUCCESS
+    Master --> Worker: 返回 ACK
+    
+    == 后续任务处理 ==
+    Master -> Master: 检查后续任务
+    alt 有后续任务
+        Master -> Master: 创建后续任务实例
+    else 无后续任务
+        Master -> DB: 更新工作流状态\nSUCCESS
+    end
+end
+
+@enduml
+

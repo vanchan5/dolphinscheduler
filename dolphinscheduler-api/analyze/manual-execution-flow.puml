@@ -1,0 +1,171 @@
+@startuml 手动执行任务完整流程
+!theme plain
+title 手动执行任务完整流程：从 API 到 Master/Worker 执行
+
+actor User as 用户
+participant "API Controller" as API
+participant "ExecutorService" as Service
+participant "TriggerWorkflowExecutorDelegate" as Delegate
+participant "Registry" as Registry
+participant "Master RPC Server" as MasterRPC
+participant "WorkflowControlClient" as ControlClient
+participant "WorkflowManualTrigger" as Trigger
+participant "Database" as DB
+participant "CommandEngine" as CmdEngine
+participant "WorkflowExecutionRunnableFactory" as Factory
+participant "RunWorkflowCommandHandler" as Handler
+participant "WorkflowExecutionRunnable" as WorkflowRunnable
+participant "GlobalTaskDispatchWaitingQueue" as Queue
+participant "WorkerTaskDispatcher" as Dispatcher
+participant "Worker RPC Server" as WorkerRPC
+participant "WorkerTaskExecutor" as WorkerExecutor
+participant "SqlTask" as SqlTask
+participant "External DB" as ExtDB
+
+== 阶段一：API 接收请求 ==
+用户 -> API: POST /start-workflow-instance\n(workflowDefinitionCode, execType=START_PROCESS)
+API -> Service: triggerWorkflowDefinition(request)
+Service -> Service: transform & validate
+Service -> Delegate: execute(triggerWorkflowDTO)
+
+== 阶段二：RPC 调用 Master ==
+Delegate -> Registry: getRandomServer(MASTER)
+Registry --> Delegate: masterServer (host:port)
+Delegate -> MasterRPC: RPC call\nmanualTriggerWorkflow(request)
+note right: Clients.withService(IWorkflowControlClient.class)\n.withHost(masterAddress)\n.manualTriggerWorkflow(request)
+
+== 阶段三：Master 创建工作流实例和 Command ==
+MasterRPC -> ControlClient: manualTriggerWorkflow(request)
+ControlClient -> Trigger: triggerWorkflow(request)
+
+Trigger -> Trigger: constructWorkflowInstance()
+note right: 创建工作流实例对象\n设置状态为 SUBMITTED_SUCCESS
+Trigger -> DB: insert workflowInstance\nt_ds_process_instance
+DB --> Trigger: workflowInstanceId
+
+Trigger -> Trigger: constructTriggerCommand()
+note right: 构建 Command 对象\nCommandType = START_PROCESS
+Trigger -> DB: insert command\nt_ds_command
+DB --> Trigger: commandId
+
+Trigger --> ControlClient: WorkflowManualTriggerResponse.success(workflowInstanceId)
+ControlClient --> MasterRPC: response
+MasterRPC --> Delegate: response
+Delegate --> Service: workflowInstanceId
+Service --> API: Result.success(workflowInstanceId)
+API --> 用户: 返回工作流实例 ID
+
+== 阶段四：CommandEngine 处理 Command ==
+CmdEngine -> CmdEngine: run() (后台循环线程)
+loop 每秒检查一次
+    CmdEngine -> DB: fetchCommands()\n从 t_ds_command 获取
+    DB --> CmdEngine: List<Command>
+    
+    alt 有 Command
+        CmdEngine -> Factory: createWorkflowExecuteRunnable(command)
+        Factory -> DB: deleteById(command.id)\n防止重复处理
+        Factory -> Handler: handleCommand(command)
+        
+        Handler -> Handler: assembleWorkflowDefinition()
+        Handler -> Handler: assembleProject()
+        Handler -> Handler: assembleWorkflowGraph()
+        Handler -> Handler: assembleWorkflowInstance()
+        note right: 更新工作流实例状态\nSUBMITTED_SUCCESS → RUNNING_EXECUTION
+        Handler -> DB: update workflowInstance
+        Handler -> Handler: assembleWorkflowExecutionGraph()
+        note right: 创建 TaskExecutionRunnable\n构建任务执行图
+        Handler --> Factory: WorkflowExecutionRunnable
+        Factory --> CmdEngine: WorkflowExecutionRunnable
+        
+        CmdEngine -> WorkflowRunnable: put to repository
+        CmdEngine -> WorkflowRunnable: register event bus
+        CmdEngine -> WorkflowRunnable: publish WorkflowStartLifecycleEvent
+    end
+end
+
+== 阶段五：工作流启动，创建任务实例 ==
+WorkflowRunnable -> WorkflowRunnable: 处理 WorkflowStartLifecycleEvent
+WorkflowRunnable -> WorkflowRunnable: 检查任务依赖
+WorkflowRunnable -> WorkflowRunnable: 发布 TaskStartLifecycleEvent
+
+WorkflowRunnable -> WorkflowRunnable: initializeFirstRunTaskInstance()
+note right: 创建任务实例对象\n状态: SUBMITTED_SUCCESS
+WorkflowRunnable -> DB: insert taskInstance\nt_ds_task_instance
+DB --> WorkflowRunnable: taskInstanceId
+
+WorkflowRunnable -> Queue: addTask(taskExecutionRunnable)
+
+== 阶段六：任务调度 ==
+Dispatcher -> Dispatcher: run() (后台循环线程)
+loop 从队列获取任务
+    Dispatcher -> Queue: takeTask()
+    Queue --> Dispatcher: ITaskExecutionRunnable
+    
+    Dispatcher -> Dispatcher: workerLoadBalancer.select(workerGroup)
+    note right: 负载均衡选择 Worker
+    Dispatcher -> Dispatcher: 更新任务状态\nRUNNING_EXECUTION
+    Dispatcher -> DB: update taskInstance\n设置 host, start_time
+    
+    Dispatcher -> WorkerRPC: RPC call\ndispatchTask(request)
+    note right: Clients.withService(ITaskInstanceOperator.class)\n.withHost(workerAddress)\n.dispatchTask(request)
+end
+
+== 阶段七：Worker 接收任务 ==
+WorkerRPC -> WorkerRPC: 接收 dispatchTask 请求
+WorkerRPC -> WorkerRPC: 检查 Worker 状态
+WorkerRPC -> WorkerExecutor: 创建 WorkerTaskExecutor
+WorkerRPC -> WorkerExecutor: 提交到线程池
+WorkerRPC --> Dispatcher: TaskInstanceDispatchResponse.success()
+
+WorkerExecutor -> WorkerExecutor: 发送 DISPATCHED 事件
+WorkerExecutor -> MasterRPC: TaskExecutionDispatchEvent
+MasterRPC --> WorkerExecutor: ACK
+
+== 阶段八：Worker 执行任务 ==
+WorkerExecutor -> WorkerExecutor: run()
+WorkerExecutor -> WorkerExecutor: initializeTask()
+WorkerExecutor -> WorkerExecutor: beforeExecute()
+WorkerExecutor -> WorkerExecutor: 发送 RUNNING 事件
+WorkerExecutor -> MasterRPC: TaskExecutionRunningEvent
+MasterRPC --> WorkerExecutor: ACK
+
+WorkerExecutor -> SqlTask: createTask(taskExecutionContext)
+SqlTask -> SqlTask: 解析任务参数\n构建 SqlParameters
+SqlTask -> SqlTask: 构建数据源连接参数
+
+SqlTask -> ExtDB: 建立数据库连接
+SqlTask -> SqlTask: 处理参数替换
+SqlTask -> SqlTask: 执行前置 SQL
+alt SQL 类型 = 查询
+    SqlTask -> ExtDB: executeQuery()
+    ExtDB --> SqlTask: ResultSet
+    SqlTask -> SqlTask: 处理结果集\n转换为 JSON
+else SQL 类型 = 非查询
+    SqlTask -> ExtDB: executeUpdate()
+    ExtDB --> SqlTask: 影响行数
+end
+SqlTask -> SqlTask: 执行后置 SQL
+SqlTask -> ExtDB: 关闭连接
+
+SqlTask --> WorkerExecutor: 执行完成
+WorkerExecutor -> WorkerExecutor: afterExecute()
+WorkerExecutor -> WorkerExecutor: 发送 SUCCESS 事件
+WorkerExecutor -> MasterRPC: TaskExecutionSuccessEvent
+MasterRPC --> WorkerExecutor: ACK
+
+== 阶段九：Master 更新状态 ==
+MasterRPC -> MasterRPC: onTaskInstanceExecutionSuccess(event)
+MasterRPC -> WorkflowRunnable: 发布 TaskSuccessLifecycleEvent
+WorkflowRunnable -> DB: 更新任务状态\nSUCCESS, end_time
+WorkflowRunnable -> WorkflowRunnable: 检查后续任务
+
+alt 有后续任务且满足条件
+    WorkflowRunnable -> WorkflowRunnable: 创建后续任务实例
+    WorkflowRunnable -> Queue: addTask(后续任务)
+    note right: 重复阶段六到阶段九
+else 无后续任务
+    WorkflowRunnable -> DB: 更新工作流状态\nSUCCESS
+end
+
+@enduml
+

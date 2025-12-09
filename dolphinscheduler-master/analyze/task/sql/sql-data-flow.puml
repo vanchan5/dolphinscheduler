@@ -1,0 +1,57 @@
+@startuml SQL任务数据流转
+!theme plain
+title SQL 任务数据流转
+
+database "DolphinScheduler 数据库" {
+    [t_ds_task_definition] as TaskDef
+    [t_ds_process_instance] as WorkflowInst
+    [t_ds_task_instance] as TaskInst
+    [t_ds_datasource] as Datasource
+}
+
+component "Master" {
+    [WorkflowEngine] as Engine
+    [TaskDispatcher] as Dispatcher
+    [TaskExecutionEventListener] as EventListener
+    [GlobalTaskDispatchWaitingQueue] as Queue
+}
+
+component "Worker" {
+    [WorkerTaskExecutor] as Executor
+    [SqlTask] as SqlTask
+    [DataSourceClient] as DSClient
+    [WorkerMessageSender] as MessageSender
+}
+
+cloud "外部数据库" {
+    [MySQL/PostgreSQL/Hive] as ExternalDB
+}
+
+' 任务定义读取
+TaskDef --> Engine: 读取任务定义
+
+' 任务实例创建
+Engine --> TaskInst: 创建任务实例
+
+' 任务调度
+TaskInst --> Queue: 提交到调度队列
+Queue --> Dispatcher: 获取任务
+Dispatcher --> Executor: RPC 分发任务
+
+' 数据源读取
+Datasource --> SqlTask: 读取数据源配置
+
+' SQL 执行
+SqlTask --> DSClient: 构建连接参数
+DSClient --> ExternalDB: 建立连接
+ExternalDB --> SqlTask: 执行 SQL
+SqlTask --> ExternalDB: 返回结果
+
+' 事件通知
+SqlTask --> MessageSender: 发送执行事件
+MessageSender --> EventListener: 任务执行事件
+EventListener --> TaskInst: 更新任务状态
+TaskInst --> WorkflowInst: 更新工作流状态
+
+@enduml
+
