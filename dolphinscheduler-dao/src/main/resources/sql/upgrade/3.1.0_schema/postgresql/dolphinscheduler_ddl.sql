@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS "t_ds_cluster" (
 );
 
 --- set process_instance_priority and task_priority default value as 2
+ALTER TABLE t_ds_error_command ADD COLUMN IF NOT EXISTS process_instance_priority int DEFAULT '2';
+ALTER TABLE t_ds_schedules ADD COLUMN IF NOT EXISTS process_instance_priority int DEFAULT '2';
+ALTER TABLE t_ds_command ADD COLUMN IF NOT EXISTS process_instance_priority int DEFAULT '2';
+
 alter table t_ds_process_instance alter column process_instance_priority set default 2;
 alter table t_ds_schedules alter column process_instance_priority set default 2;
 alter table t_ds_command alter column process_instance_priority set default 2;

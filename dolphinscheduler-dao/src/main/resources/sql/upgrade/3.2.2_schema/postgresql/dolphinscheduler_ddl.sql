@@ -32,7 +32,6 @@ ALTER TABLE t_ds_relation_project_worker_group ALTER COLUMN id SET DEFAULT NEXTV
 ALTER TABLE t_ds_project_parameter ADD COLUMN IF NOT EXISTS operator int;
 
 -- modify_data_t_ds_audit_log_input_entry
-delimiter d//
 CREATE OR REPLACE FUNCTION modify_data_t_ds_audit_log_input_entry() RETURNS void AS $$
 BEGIN
       IF EXISTS (SELECT 1
@@ -53,7 +52,6 @@ BEGIN
 END IF;
 END;
 $$ LANGUAGE plpgsql;
-d//
 
 select modify_data_t_ds_audit_log_input_entry();
 DROP FUNCTION IF EXISTS modify_data_t_ds_audit_log_input_entry();

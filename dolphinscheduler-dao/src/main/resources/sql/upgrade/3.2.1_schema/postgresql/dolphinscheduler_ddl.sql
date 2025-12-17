@@ -16,7 +16,6 @@
 */
 -- modify_data_t_ds_dq_rule_input_entry
 
-delimiter d//
 CREATE OR REPLACE FUNCTION modify_data_t_ds_dq_rule_input_entry() RETURNS void AS $$
 BEGIN
       IF EXISTS (SELECT 1
@@ -29,13 +28,11 @@ ALTER TABLE t_ds_dq_rule_input_entry
 END IF;
 END;
 $$ LANGUAGE plpgsql;
-d//
 
 select modify_data_t_ds_dq_rule_input_entry();
 DROP FUNCTION IF EXISTS modify_data_t_ds_dq_rule_input_entry();
 
 -- modify_data_type_t_ds_dq_rule_input_entry
-delimiter d//
 CREATE OR REPLACE FUNCTION modify_data_type_t_ds_dq_rule_input_entry() RETURNS void AS $$
 BEGIN
       IF EXISTS (SELECT 1
@@ -48,7 +45,6 @@ ALTER TABLE t_ds_dq_rule_input_entry
 END IF;
 END;
 $$ LANGUAGE plpgsql;
-d//
 
 select modify_data_type_t_ds_dq_rule_input_entry();
 DROP FUNCTION IF EXISTS modify_data_type_t_ds_dq_rule_input_entry();
