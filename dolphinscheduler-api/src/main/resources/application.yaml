@@ -77,6 +77,10 @@ spring:
     static-path-pattern: /static/**
   cloud.discovery.client.composite-indicator.enabled: false
 
+logging:
+  level:
+    root: DEBUG
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html

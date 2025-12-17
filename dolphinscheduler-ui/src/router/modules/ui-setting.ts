@@ -30,7 +30,7 @@ export default {
   children: [
     {
       path: '',
-      name: 'ui-setting',
+      name: 'ui-setting-index',
       component: components['ui-setting'],
       meta: {
         title: '设置',
