@@ -104,15 +104,29 @@ public class MasterRegistryClient implements AutoCloseable {
         // remove before persist
         registryClient.remove(masterRegistryPath);
         registryClient.persistEphemeral(masterRegistryPath, JSONUtils.toJsonString(masterHeartBeatTask.getHeartBeat()));
+        log.info("Master node persisted to registry path: {}, host: {}", masterRegistryPath, NetUtils.getHost());
 
+        int checkCount = 0;
         while (!registryClient.checkNodeExists(NetUtils.getHost(), RegistryNodeType.MASTER)) {
-            log.warn("The current master server node:{} cannot find in registry", NetUtils.getHost());
+            checkCount++;
+            log.warn("The current master server node:{} cannot find in registry, check count: {}, registry path: {}", 
+                    NetUtils.getHost(), checkCount, masterRegistryPath);
             ThreadUtils.sleep(SLEEP_TIME_MILLIS);
+            // Add timeout protection to avoid infinite loop
+            if (checkCount > 30) {
+                log.error("Master node:{} cannot be found in registry after {} checks, this may indicate a registry synchronization issue. " +
+                         "Registry path: {}, master address: {}", NetUtils.getHost(), checkCount, masterRegistryPath, masterConfig.getMasterAddress());
+                throw new RegistryException("Master node cannot be found in registry after multiple checks, registry may not be synchronized");
+            }
         }
+        log.info("Master node:{} found in registry after {} checks", NetUtils.getHost(), checkCount);
 
         // sleep 1s, waiting master failover remove
+        log.info("About to sleep {}ms, waiting for master failover remove", SLEEP_TIME_MILLIS);
         ThreadUtils.sleep(SLEEP_TIME_MILLIS);
+        log.info("Finished waiting for master failover remove, about to start heartbeat task");
 
+        log.info("About to start masterHeartBeatTask, masterHeartBeatTask is null: {}", masterHeartBeatTask == null);
         masterHeartBeatTask.start();
         log.info("Master node : {} registered to registry center successfully", masterConfig.getMasterAddress());
 
