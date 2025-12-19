@@ -224,7 +224,7 @@ public final class Constants {
     /**
      * sleep 1000ms
      */
-    public static final long SLEEP_TIME_MILLIS = 1_000L;
+    public static final long SLEEP_TIME_MILLIS = 1_000_000L;
 
     public static final Duration SERVER_CLOSE_WAIT_TIME = Duration.ofSeconds(3);
 
