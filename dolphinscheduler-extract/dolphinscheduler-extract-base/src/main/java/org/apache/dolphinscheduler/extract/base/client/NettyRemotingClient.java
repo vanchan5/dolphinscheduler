@@ -94,6 +94,7 @@ public class NettyRemotingClient implements AutoCloseable {
                 .option(ChannelOption.TCP_NODELAY, clientConfig.isTcpNoDelay())
                 .option(ChannelOption.SO_SNDBUF, clientConfig.getSendBufferSize())
                 .option(ChannelOption.SO_RCVBUF, clientConfig.getReceiveBufferSize())
+                //建立 TCP 连接的超时时间
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, clientConfig.getConnectTimeoutMillis())
                 .handler(new ChannelInitializer<SocketChannel>() {
 
@@ -105,7 +106,7 @@ public class NettyRemotingClient implements AutoCloseable {
                                                 0,
                                                 clientConfig.getHeartBeatIntervalMillis(),
                                                 0,
-                                                TimeUnit.MILLISECONDS))
+                                                TimeUnit.MILLISECONDS))//设置客户端:每 10 秒发送心跳
                                 .addLast(new TransporterDecoder(), clientHandler, new TransporterEncoder());
                     }
                 });
@@ -123,6 +124,7 @@ public class NettyRemotingClient implements AutoCloseable {
         int maxRetryTimes = retryStrategy.maxRetryTimes();
         int currentExecuteTimes = 1;
 
+        // 重试机制,成功时立即返回,支持重试间隔（
         while (true) {
             final long start = System.currentTimeMillis();
             try {
@@ -133,7 +135,11 @@ public class NettyRemotingClient implements AutoCloseable {
                 RpcMetrics.recordClientSyncRequestException(clientSyncExceptionMetrics);
 
                 if (currentExecuteTimes < maxRetryTimes
+                        //判断当前异常是否属于需要重试的异常类型
                         && Arrays.stream(retryStrategy.retryFor()).anyMatch(e -> e.isInstance(ex))) {
+                    // 满足两个条件才重试：
+                    // 1. 重试次数未达到上限
+                    // 2. 当前异常类型匹配重试策略中配置的异常类型
                     currentExecuteTimes++;
                     if (retryStrategy.retryInterval() > 0) {
                         ThreadUtils.sleep(retryStrategy.retryInterval());

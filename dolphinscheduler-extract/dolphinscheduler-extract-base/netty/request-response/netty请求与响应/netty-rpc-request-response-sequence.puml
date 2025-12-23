@@ -1,0 +1,264 @@
+@startuml Netty RPC 请求-响应匹配机制时序图
+
+!theme plain
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 60
+
+participant "Client Thread" as Client
+participant "NettyRemotingClient" as RpcClient
+participant "ResponseFuture" as Future
+participant "FUTURE_TABLE" as Table
+participant "Channel" as Channel
+participant "NettyClientHandler" as ClientHandler
+participant "Server Channel" as ServerChannel
+participant "JdkDynamicServerHandler" as ServerHandler
+participant "MethodInvoker" as Invoker
+
+== 阶段1: 客户端发送请求 ==
+
+Client -> RpcClient: sendSync(transporter)
+activate RpcClient
+
+RpcClient -> RpcClient: 创建 TransporterHeader
+note right of RpcClient
+  **生成唯一 opaque**
+  TransporterHeader.of(methodIdentifier)
+  → opaque = REQUEST_ID.getAndIncrement()
+  → opaque = 1 (假设)
+end note
+
+RpcClient -> RpcClient: getOrCreateChannel(serverHost)
+RpcClient -> Channel: 获取或创建 Channel
+Channel --> RpcClient: Channel 对象
+
+RpcClient -> Future: new ResponseFuture(opaque=1, timeout)
+activate Future
+note right of Future
+  **构造函数中：**
+  FUTURE_TABLE.put(1, this)
+  存储到全局表中
+end note
+
+Future -> Table: put(opaque=1, future)
+activate Table
+Table -> Table: ConcurrentHashMap.put(1, future)
+Table --> Future: 存储成功
+deactivate Table
+
+Future --> RpcClient: ResponseFuture 对象
+deactivate Future
+
+RpcClient -> Channel: writeAndFlush(transporter)
+activate Channel
+note right of Channel
+  **请求包含：**
+  - opaque = 1
+  - methodIdentifier
+  - body (参数)
+end note
+
+Channel -> Channel: 通过 TCP 发送请求
+Channel --> RpcClient: 发送成功（异步）
+deactivate Channel
+
+RpcClient -> Future: waitResponse()
+activate Future
+note right of Future
+  **阻塞等待响应**
+  CountDownLatch.await(timeout)
+  线程在此处阻塞
+end note
+
+== 阶段2: 服务端接收和处理请求 ==
+
+ServerChannel -> ServerHandler: channelRead(Transporter)
+activate ServerHandler
+
+ServerHandler -> ServerHandler: transporter.getHeader().getOpaque()
+note right of ServerHandler
+  **获取请求的 opaque**
+  opaque = 1
+end note
+
+ServerHandler -> ServerHandler: transporter.getHeader().getMethodIdentifier()
+ServerHandler -> Invoker: methodInvoker.invoke(args)
+activate Invoker
+
+Invoker -> Invoker: 执行方法调用
+Invoker -> Invoker: 生成结果
+Invoker --> ServerHandler: result
+deactivate Invoker
+
+== 阶段3: 服务端返回响应 ==
+
+ServerHandler -> ServerHandler: 构建响应
+note right of ServerHandler
+  **关键：使用请求的 opaque**
+  TransporterHeader.of(
+    transporter.getHeader().getOpaque(),  // opaque = 1
+    methodIdentifier
+  )
+end note
+
+ServerHandler -> ServerHandler: Transporter.of(header, response)
+note right of ServerHandler
+  **响应包含：**
+  - opaque = 1 (与请求相同)
+  - methodIdentifier
+  - body (结果)
+end note
+
+ServerHandler -> ServerChannel: writeAndFlush(response)
+activate ServerChannel
+note right of ServerChannel
+  **通过同一个 Channel 发送响应**
+  响应中包含 opaque = 1
+end note
+
+ServerChannel -> ServerChannel: 通过 TCP 发送响应
+ServerChannel --> ServerHandler: 发送成功（异步）
+deactivate ServerChannel
+ServerHandler --> ServerChannel: 处理完成
+deactivate ServerHandler
+
+== 阶段4: 客户端接收响应 ==
+
+Channel -> ClientHandler: channelRead(Transporter)
+activate ClientHandler
+
+ClientHandler -> ClientHandler: transporter.getHeader().getOpaque()
+note right of ClientHandler
+  **获取响应的 opaque**
+  opaque = 1
+end note
+
+ClientHandler -> Table: getFuture(opaque=1)
+activate Table
+note right of Table
+  **根据 opaque 查找 ResponseFuture**
+  FUTURE_TABLE.get(1)
+end note
+
+Table --> ClientHandler: ResponseFuture (opaque=1)
+deactivate Table
+
+ClientHandler -> ClientHandler: 反序列化响应
+ClientHandler -> ClientHandler: JsonSerializer.deserialize(body)
+
+ClientHandler -> Future: setIRpcResponse(response)
+activate Future
+Future -> Future: this.iRpcResponse = response
+Future --> ClientHandler: 设置成功
+deactivate Future
+
+ClientHandler -> Future: putResponse(response)
+activate Future
+Future -> Future: this.iRpcResponse = response
+Future -> Future: latch.countDown()
+note right of Future
+  **唤醒等待的线程**
+  CountDownLatch.countDown()
+  阻塞的 waitResponse() 被唤醒
+end note
+
+Future -> Table: remove(opaque=1)
+activate Table
+Table -> Table: FUTURE_TABLE.remove(1)
+Table --> Future: 移除成功
+deactivate Table
+
+Future --> ClientHandler: 响应已设置
+deactivate Future
+
+ClientHandler --> Channel: 处理完成
+deactivate ClientHandler
+
+== 阶段5: 客户端获取结果 ==
+
+Future -> Future: waitResponse() 返回
+note right of Future
+  **CountDownLatch 被唤醒**
+  返回 IRpcResponse
+end note
+
+Future --> RpcClient: IRpcResponse
+deactivate Future
+
+RpcClient --> Client: 返回结果
+deactivate RpcClient
+
+== 并发请求示例 ==
+
+note over Client, Table
+  **同一个 Channel 可以并发发送多个请求**
+end note
+
+group 请求1
+    Client -> RpcClient: sendSync(request1, opaque=1)
+    RpcClient -> Table: put(1, future1)
+    RpcClient -> Channel: writeAndFlush(request1)
+    RpcClient -> Future: waitResponse() (阻塞)
+end
+
+group 请求2
+    Client -> RpcClient: sendSync(request2, opaque=2)
+    RpcClient -> Table: put(2, future2)
+    RpcClient -> Channel: writeAndFlush(request2)
+    RpcClient -> Future: waitResponse() (阻塞)
+end
+
+group 请求3
+    Client -> RpcClient: sendSync(request3, opaque=3)
+    RpcClient -> Table: put(3, future3)
+    RpcClient -> Channel: writeAndFlush(request3)
+    RpcClient -> Future: waitResponse() (阻塞)
+end
+
+note over ServerChannel: **服务端可以乱序返回响应**
+
+group 响应2先到达
+    ServerChannel -> ClientHandler: channelRead(response2, opaque=2)
+    ClientHandler -> Table: getFuture(2)
+    Table --> ClientHandler: future2
+    ClientHandler -> Future: future2.putResponse(response2)
+    Future -> Future: 唤醒等待 future2 的线程
+end
+
+group 响应1后到达
+    ServerChannel -> ClientHandler: channelRead(response1, opaque=1)
+    ClientHandler -> Table: getFuture(1)
+    Table --> ClientHandler: future1
+    ClientHandler -> Future: future1.putResponse(response1)
+    Future -> Future: 唤醒等待 future1 的线程
+end
+
+group 响应3最后到达
+    ServerChannel -> ClientHandler: channelRead(response3, opaque=3)
+    ClientHandler -> Table: getFuture(3)
+    Table --> ClientHandler: future3
+    ClientHandler -> Future: future3.putResponse(response3)
+    Future -> Future: 唤醒等待 future3 的线程
+end
+
+note over Client, Table
+  **通过 opaque 匹配，不关心响应顺序**
+  每个请求都有独立的 ResponseFuture
+  响应可以乱序到达，都能正确匹配
+end note
+
+== 总结 ==
+
+note over Client, Invoker
+  **关键机制：**
+  
+  1. **opaque 唯一标识**：每个请求有唯一的 opaque
+  2. **Future 存储**：以 opaque 为 key 存储 ResponseFuture
+  3. **响应匹配**：响应中包含请求的 opaque，用于查找 Future
+  4. **阻塞等待**：使用 CountDownLatch 实现阻塞等待
+  5. **并发支持**：同一个 Channel 可以并发发送多个请求
+  6. **乱序支持**：响应可以乱序到达，通过 opaque 匹配
+  
+  **不依赖 Channel，而是依赖 opaque 匹配！**
+end note
+
+@enduml

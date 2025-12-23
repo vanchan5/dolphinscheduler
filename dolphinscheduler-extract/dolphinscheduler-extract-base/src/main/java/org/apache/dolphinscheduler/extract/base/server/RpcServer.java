@@ -49,10 +49,12 @@ public class RpcServer implements ServerMethodInvokerRegistry, AutoCloseable {
 
     @Override
     public void registerServerMethodInvokerProvider(Object serverMethodInvokerProviderBean) {
+        // 获取bean对应的接口
         for (Class<?> anInterface : serverMethodInvokerProviderBean.getClass().getInterfaces()) {
             if (anInterface.getAnnotation(RpcService.class) == null) {
                 continue;
             }
+            // 接口的方法
             for (Method method : anInterface.getDeclaredMethods()) {
                 RpcMethod rpcMethod = method.getAnnotation(RpcMethod.class);
                 if (rpcMethod == null) {

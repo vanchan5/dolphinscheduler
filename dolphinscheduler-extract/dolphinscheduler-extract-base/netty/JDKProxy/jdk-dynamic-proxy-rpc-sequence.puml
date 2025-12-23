@@ -1,0 +1,443 @@
+@startuml JDK 动态代理 RPC 调用完整时序图
+
+!theme plain
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 60
+
+participant "客户端代码\n(TriggerWorkflowExecutorDelegate)" as ClientCode
+participant "Clients" as Clients
+participant "JdkDynamicRpcClientProxyFactory" as ProxyFactory
+participant "Proxy\n(JDK)" as JDKProxy
+participant "代理对象\n($Proxy0)" as ProxyObject
+participant "ClientInvocationHandler" as ClientHandler
+participant "SyncClientMethodInvoker" as ClientInvoker
+participant "NettyRemotingClient" as RpcClient
+participant "ResponseFuture" as Future
+participant "Netty Channel\n(客户端)" as ClientChannel
+participant "TCP 连接" as TCP
+participant "Netty Channel\n(服务端)" as ServerChannel
+participant "JdkDynamicServerHandler" as ServerHandler
+participant "ServerMethodInvoker\n(ServerMethodInvokerImpl)" as ServerInvoker
+participant "服务实现\n(WorkflowControlClient)" as ServiceImpl
+participant "NettyClientHandler" as NettyHandler
+participant "EventLoop 线程" as EventLoopThread
+
+== 阶段1: 创建代理对象 ==
+
+ClientCode -> Clients: withService(IWorkflowControlClient)
+activate Clients
+Clients -> ProxyFactory: getProxyClient(serverHost, interface)
+activate ProxyFactory
+
+ProxyFactory -> ProxyFactory: 检查缓存
+alt 缓存未命中
+    ProxyFactory -> JDKProxy: newProxyInstance(classLoader, interfaces, handler)
+    activate JDKProxy
+    note right of JDKProxy
+      参数：
+      - classLoader: IWorkflowControlClient.class.getClassLoader()
+      - interfaces: [IWorkflowControlClient.class]
+      - handler: ClientInvocationHandler
+    end note
+    note right of JDKProxy
+      **JDK 动态生成代理类**
+      1. 生成 $Proxy0 类
+      2. 实现 IWorkflowControlClient 接口
+      3. 所有方法都调用 InvocationHandler.invoke()
+    end note
+    JDKProxy -> ClientHandler: 创建 ClientInvocationHandler
+    activate ClientHandler
+    ClientHandler --> JDKProxy: InvocationHandler 对象
+    deactivate ClientHandler
+    JDKProxy --> ProxyFactory: 代理对象 ($Proxy0 实例)
+    deactivate JDKProxy
+    ProxyFactory -> ProxyFactory: 存入缓存
+else 缓存命中
+    ProxyFactory -> ProxyFactory: 从缓存获取
+end
+
+ProxyFactory --> Clients: 代理对象
+deactivate ProxyFactory
+Clients --> ClientCode: IWorkflowControlClient 代理对象
+deactivate Clients
+
+note over ClientCode, ProxyObject
+  **代理对象创建完成**
+  client 的实际类型是 $Proxy0
+  实现了 IWorkflowControlClient 接口
+end note
+
+== 阶段2: 方法调用拦截 ==
+
+ClientCode -> ProxyObject: manualTriggerWorkflow(request)
+activate ProxyObject
+note right of ProxyObject
+  **JDK 动态生成的代理类方法**
+  public WorkflowManualTriggerResponse manualTriggerWorkflow(...) {
+      return (WorkflowManualTriggerResponse) h.invoke(
+          this,
+          method,
+          new Object[]{request}
+      );
+  }
+end note
+
+ProxyObject -> ClientHandler: invoke(proxy, method, args)
+activate ClientHandler
+
+ClientHandler -> ClientHandler: 检查 @RpcMethod 注解
+note right of ClientHandler
+  **检查方法是否有 @RpcMethod 注解**
+  method.getAnnotation(RpcMethod.class)
+  如果有，转换为 RPC 调用
+end note
+
+ClientHandler -> ClientHandler: 检查方法调用器缓存
+alt 缓存未命中
+    ClientHandler -> ClientInvoker: 创建 SyncClientMethodInvoker
+    activate ClientInvoker
+    ClientInvoker --> ClientHandler: MethodInvoker 对象
+    ClientHandler -> ClientHandler: 存入缓存
+else 缓存命中
+    ClientHandler -> ClientHandler: 从缓存获取
+end
+
+ClientHandler -> ClientInvoker: invoke(proxy, method, args)
+activate ClientInvoker
+
+== 阶段3: 构建 RPC 请求 ==
+
+ClientInvoker -> ClientInvoker: 获取 @RpcMethod 注解
+note right of ClientInvoker
+  **获取 @RpcMethod 注解信息**
+  method.getAnnotation(RpcMethod.class)
+  - timeout: 超时时间
+  - retry: 重试策略
+end note
+
+ClientInvoker -> ClientInvoker: 生成方法标识符
+note right of ClientInvoker
+  **方法标识符：**
+  IWorkflowControlClient#manualTriggerWorkflow(WorkflowManualTriggerRequest)
+end note
+
+ClientInvoker -> ClientInvoker: 序列化参数
+note right of ClientInvoker
+  **将方法参数序列化为 JSON**
+  JsonSerializer.serialize(StandardRpcRequest.of(args))
+end note
+
+ClientInvoker -> ClientInvoker: 构建 Transporter
+note right of ClientInvoker
+  **Transporter 包含：**
+  - TransporterHeader: methodIdentifier, opaque
+  - Body: 序列化后的参数
+end note
+
+ClientInvoker -> ClientInvoker: 构建 SyncRequestDto
+note right of ClientInvoker
+  **SyncRequestDto 包含：**
+  - transporter: 请求数据
+  - serverHost: 服务端地址
+  - timeoutMillis: 超时时间
+  - retryStrategy: 重试策略
+end note
+
+ClientInvoker -> RpcClient: sendSync(syncRequestDto)
+activate RpcClient
+
+== 阶段4: 发送 RPC 请求 ==
+
+RpcClient -> RpcClient: getOrCreateChannel(serverHost)
+RpcClient -> ClientChannel: 获取或创建 Channel
+activate ClientChannel
+ClientChannel --> RpcClient: Channel 对象
+deactivate ClientChannel
+
+RpcClient -> Future: new ResponseFuture(opaque, timeout)
+activate Future
+note right of Future
+  **创建 ResponseFuture**
+  opaque = 1 (假设)
+  FUTURE_TABLE.put(1, future)
+end note
+Future --> RpcClient: ResponseFuture
+
+RpcClient -> ClientChannel: writeAndFlush(transporter)
+activate ClientChannel
+note right of ClientChannel
+  **请求包含：**
+  - opaque = 1
+  - methodIdentifier = "IWorkflowControlClient#manualTriggerWorkflow(...)"
+  - body = 序列化后的参数
+end note
+
+ClientChannel -> TCP: 发送数据（TCP）
+activate TCP
+TCP -> ServerChannel: 接收数据（TCP）
+activate ServerChannel
+ServerChannel --> TCP: 数据接收完成
+deactivate ServerChannel
+TCP --> ClientChannel: 发送完成
+deactivate TCP
+ClientChannel --> RpcClient: 发送成功（异步）
+deactivate ClientChannel
+
+RpcClient -> Future: waitResponse()
+activate Future
+note right of Future
+  **业务线程阻塞等待响应**
+  CountDownLatch.await()
+  线程在此处阻塞
+end note
+Future --> RpcClient: (阻塞等待)
+deactivate Future
+
+== 阶段5: 服务端接收请求 ==
+
+ServerChannel -> ServerHandler: channelRead(Transporter)
+activate ServerHandler
+note right of ServerHandler
+  **Netty EventLoop 线程接收请求**
+  通过 Channel 接收数据
+end note
+
+ServerHandler -> ServerHandler: 提取 methodIdentifier
+note right of ServerHandler
+  **从 TransporterHeader 提取**
+  methodIdentifier = "IWorkflowControlClient#manualTriggerWorkflow(...)"
+end note
+
+ServerHandler -> ServerHandler: 检查心跳
+alt 心跳请求
+    ServerHandler -> ServerHandler: 直接返回
+    ServerHandler --> ServerChannel: 处理完成
+else 正常请求
+    ServerHandler -> ServerHandler: 查找 ServerMethodInvoker
+    note right of ServerHandler
+      **根据方法标识符查找 ServerMethodInvoker**
+      methodInvokerMap.get(methodIdentifier)
+      从注册表中查找
+    end note
+    
+    alt 方法未找到
+        ServerHandler -> ServerHandler: 构建错误响应
+        ServerHandler -> ServerChannel: writeAndFlush(errorResponse)
+        activate ServerChannel
+        ServerChannel --> ServerHandler: 发送完成
+        deactivate ServerChannel
+        ServerHandler --> ServerChannel: 处理完成
+    else 方法找到
+        ServerHandler -> ServerHandler: 提交到线程池执行
+        note right of ServerHandler
+          **在线程池中异步执行方法调用**
+          methodInvokeExecutor.execute(() -> {...})
+          避免阻塞 EventLoop 线程
+        end note
+    end
+end
+
+== 阶段6: 服务端处理请求（异步） ==
+
+ServerHandler -> ServerHandler: 反序列化请求参数
+note right of ServerHandler
+  **反序列化 StandardRpcRequest**
+  JsonSerializer.deserialize(transporter.getBody(), ...)
+end note
+
+ServerHandler -> ServerHandler: 反序列化方法参数
+note right of ServerHandler
+  **将 JSON 反序列化为方法参数类型**
+  循环反序列化每个参数
+  JsonSerializer.deserialize(args[i], argsTypes[i])
+end note
+
+ServerHandler -> ServerInvoker: invoke(args)
+activate ServerInvoker
+
+ServerInvoker -> ServerInvoker: 使用反射调用方法
+note right of ServerInvoker
+  **使用反射调用实际的方法**
+  method.invoke(serviceBean, args)
+  method: IWorkflowControlClient#manualTriggerWorkflow
+  serviceBean: WorkflowControlClient 实例
+end note
+
+ServerInvoker -> ServiceImpl: manualTriggerWorkflow(request)
+activate ServiceImpl
+note right of ServiceImpl
+  **执行实际的业务逻辑**
+  这是服务端的真实实现
+end note
+
+ServiceImpl -> ServiceImpl: 执行业务逻辑
+ServiceImpl --> ServerInvoker: WorkflowManualTriggerResponse
+deactivate ServiceImpl
+
+ServerInvoker --> ServerHandler: result
+deactivate ServerInvoker
+
+== 阶段7: 服务端返回响应 ==
+
+ServerHandler -> ServerHandler: 序列化返回值
+note right of ServerHandler
+  **将方法返回值序列化为 JSON**
+  JsonSerializer.serialize(result)
+end note
+
+ServerHandler -> ServerHandler: 构建响应
+note right of ServerHandler
+  **关键：使用请求的 opaque**
+  TransporterHeader.of(transporter.getHeader().getOpaque(), methodIdentifier)
+  opaque = 1 (与请求相同)
+end note
+
+ServerHandler -> ServerHandler: 创建 Transporter
+note right of ServerHandler
+  **响应包含：**
+  - opaque = 1 (与请求相同)
+  - methodIdentifier
+  - body = 序列化后的结果
+end note
+
+ServerHandler -> ServerChannel: writeAndFlush(response)
+activate ServerChannel
+note right of ServerChannel
+  **通过同一个 Channel 发送响应**
+  响应中包含 opaque = 1
+end note
+
+ServerChannel -> TCP: 发送数据（TCP）
+activate TCP
+TCP -> ClientChannel: 接收数据（TCP）
+activate ClientChannel
+ClientChannel --> TCP: 数据接收完成
+deactivate ClientChannel
+TCP --> ServerChannel: 发送完成
+deactivate TCP
+ServerChannel --> ServerHandler: 发送成功（异步）
+deactivate ServerChannel
+ServerHandler --> ServerChannel: 处理完成
+deactivate ServerHandler
+
+== 阶段8: 客户端接收响应 ==
+
+ClientChannel -> EventLoopThread: channelRead(Transporter)
+activate EventLoopThread
+note right of EventLoopThread
+  **EventLoop 线程处理网络 I/O**
+  线程名：NettyClientThread-1
+  这是 Netty 的 I/O 线程，不是业务线程
+end note
+
+EventLoopThread -> NettyHandler: processReceived(transporter)
+activate NettyHandler
+
+NettyHandler -> NettyHandler: 提取 opaque
+note right of NettyHandler
+  **获取响应的 opaque**
+  opaque = 1
+end note
+
+NettyHandler -> Future: getFuture(opaque=1)
+activate Future
+note right of Future
+  **根据 opaque 查找 ResponseFuture**
+  FUTURE_TABLE.get(1)
+end note
+Future --> NettyHandler: ResponseFuture (opaque=1)
+deactivate Future
+
+NettyHandler -> NettyHandler: 反序列化响应
+NettyHandler -> NettyHandler: 反序列化响应体
+note right of NettyHandler
+  JsonSerializer.deserialize(body, StandardRpcResponse.class)
+end note
+
+NettyHandler -> Future: setIRpcResponse(response)
+activate Future
+Future -> Future: this.iRpcResponse = response
+Future --> NettyHandler: 设置成功
+deactivate Future
+
+NettyHandler -> Future: putResponse(response)
+activate Future
+Future -> Future: this.iRpcResponse = response
+Future -> Future: latch.countDown()
+note right of Future
+  **EventLoop 线程唤醒业务线程**
+  CountDownLatch.countDown()
+  阻塞的 waitResponse() 被唤醒
+end note
+
+Future -> Future: FUTURE_TABLE.remove(opaque=1)
+Future --> NettyHandler: 响应已设置
+deactivate Future
+
+NettyHandler --> EventLoopThread: 处理完成
+deactivate NettyHandler
+EventLoopThread --> ClientChannel: 处理完成
+deactivate EventLoopThread
+
+== 阶段9: 客户端获取结果 ==
+
+Future -> Future: waitResponse() 返回
+activate Future
+note right of Future
+  **业务线程被唤醒**
+  CountDownLatch 被唤醒
+  返回 IRpcResponse
+end note
+Future --> RpcClient: IRpcResponse
+deactivate Future
+
+RpcClient --> ClientInvoker: IRpcResponse
+deactivate RpcClient
+
+== 阶段10: 处理响应并返回 ==
+
+ClientInvoker -> ClientInvoker: 检查响应是否成功
+alt 响应成功
+    ClientInvoker -> ClientInvoker: 反序列化响应
+    note right of ClientInvoker
+      **将响应反序列化为方法返回类型**
+      JsonSerializer.deserialize(response.getBody(), WorkflowManualTriggerResponse.class)
+    end note
+    ClientInvoker --> ClientHandler: WorkflowManualTriggerResponse
+else 响应失败
+    ClientInvoker -> ClientInvoker: 抛出 MethodInvocationException
+    ClientInvoker --> ClientHandler: 异常
+end
+
+ClientInvoker --> ClientHandler: 结果或异常
+deactivate ClientInvoker
+
+ClientHandler -> ClientHandler: 处理异常（如果需要）
+ClientHandler --> ProxyObject: 结果或异常
+deactivate ClientHandler
+
+ProxyObject --> ClientCode: WorkflowManualTriggerResponse
+deactivate ProxyObject
+
+== 总结 ==
+
+note over ClientCode, ServiceImpl
+  **JDK 动态代理 RPC 调用完整流程：**
+  
+  1. **代理对象创建**：使用 Proxy.newProxyInstance() 动态生成
+  2. **方法拦截**：所有方法调用都被 InvocationHandler.invoke() 拦截
+  3. **RPC 转换**：将方法调用转换为 RPC 请求
+  4. **网络传输**：通过 Netty Channel 发送请求
+  5. **服务端处理**：根据 methodIdentifier 查找并执行方法
+  6. **响应返回**：通过相同的 Channel 返回响应
+  7. **响应匹配**：通过 opaque 匹配请求和响应
+  8. **结果返回**：反序列化响应并返回给客户端代码
+  
+  **关键点：**
+  - 客户端使用代理对象，像调用本地方法一样调用远程服务
+  - 服务端使用反射，根据方法标识符调用实际的方法实现
+  - 通过 opaque 机制匹配请求和响应
+  - 使用 CountDownLatch 实现线程间通信
+end note
+
+@enduml

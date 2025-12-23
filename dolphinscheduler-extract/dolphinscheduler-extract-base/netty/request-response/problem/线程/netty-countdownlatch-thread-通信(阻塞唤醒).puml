@@ -1,0 +1,274 @@
+@startuml CountDownLatch 跨线程唤醒机制时序图
+
+!theme plain
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 60
+
+participant "业务线程1\n(main)" as Thread1
+participant "业务线程2\n(worker-1)" as Thread2
+participant "NettyRemotingClient" as RpcClient
+participant "ResponseFuture1" as Future1
+participant "ResponseFuture2" as Future2
+participant "FUTURE_TABLE" as Table
+participant "CountDownLatch1" as Latch1
+participant "CountDownLatch2" as Latch2
+participant "EventLoop 线程\n(NettyClientThread-1)" as EventLoopThread
+participant "NettyClientHandler" as ClientHandler
+
+== 问题1：为什么可以跨线程唤醒？ ==
+
+note over Thread1, Latch1
+  **关键：通过共享的 CountDownLatch 对象实现跨线程通信**
+end note
+
+group 请求1：业务线程1
+    Thread1 -> RpcClient: sendSync(request1, opaque=1)
+    activate RpcClient
+    
+    RpcClient -> Future1: new ResponseFuture(opaque=1, timeout)
+    activate Future1
+    Future1 -> Latch1: new CountDownLatch(1)
+    activate Latch1
+    note right of Latch1
+      **创建共享的 CountDownLatch 对象**
+      这个对象可以被多个线程访问
+    end note
+    Latch1 --> Future1: latch 对象
+    deactivate Latch1
+    
+    Future1 -> Table: put(1, future1)
+    activate Table
+    Table -> Table: 存储到全局表
+    Table --> Future1: 存储成功
+    deactivate Table
+    
+    Future1 --> RpcClient: ResponseFuture1
+    deactivate Future1
+    
+    RpcClient -> RpcClient: channel.writeAndFlush(request1)
+    RpcClient -> Future1: waitResponse()
+    activate Future1
+    
+    Future1 -> Latch1: await(timeout)
+    activate Latch1
+    note right of Latch1
+      **业务线程1 阻塞在这里**
+      Thread1 进入 WAITING 状态
+      释放 CPU，等待被唤醒
+    end note
+    
+    Latch1 --> Future1: (阻塞等待)
+    deactivate Latch1
+    Future1 --> RpcClient: (阻塞)
+    deactivate Future1
+    RpcClient --> Thread1: (阻塞)
+    deactivate RpcClient
+end
+
+group 请求2：业务线程2（并发）
+    Thread2 -> RpcClient: sendSync(request2, opaque=2)
+    activate RpcClient
+    
+    RpcClient -> Future2: new ResponseFuture(opaque=2, timeout)
+    activate Future2
+    Future2 -> Latch2: new CountDownLatch(1)
+    activate Latch2
+    Latch2 --> Future2: latch 对象
+    deactivate Latch2
+    
+    Future2 -> Table: put(2, future2)
+    activate Table
+    Table -> Table: 存储到全局表
+    Table --> Future2: 存储成功
+    deactivate Table
+    
+    Future2 --> RpcClient: ResponseFuture2
+    deactivate Future2
+    
+    RpcClient -> RpcClient: channel.writeAndFlush(request2)
+    RpcClient -> Future2: waitResponse()
+    activate Future2
+    
+    Future2 -> Latch2: await(timeout)
+    activate Latch2
+    note right of Latch2
+      **业务线程2 阻塞在这里**
+      Thread2 进入 WAITING 状态
+      释放 CPU，等待被唤醒
+      
+      ⚠️ 注意：Thread2 的阻塞不影响 Thread1
+      它们是不同的线程，独立执行
+    end note
+    
+    Latch2 --> Future2: (阻塞等待)
+    deactivate Latch2
+    Future2 --> RpcClient: (阻塞)
+    deactivate Future2
+    RpcClient --> Thread2: (阻塞)
+    deactivate RpcClient
+end
+
+== EventLoop 线程接收响应 ==
+
+group 响应1到达
+    EventLoopThread -> ClientHandler: channelRead(response1, opaque=1)
+    activate ClientHandler
+    
+    ClientHandler -> Table: getFuture(opaque=1)
+    activate Table
+    note right of Table
+      **从全局表获取同一个 ResponseFuture1 对象**
+      这个对象是 Thread1 创建的
+    end note
+    Table --> ClientHandler: ResponseFuture1 (共享对象)
+    deactivate Table
+    
+    ClientHandler -> Future1: putResponse(response1)
+    activate Future1
+    Future1 -> Future1: this.iRpcResponse = response1
+    Future1 -> Latch1: countDown()
+    activate Latch1
+    note right of Latch1
+      **EventLoop 线程唤醒业务线程1**
+      CountDownLatch.countDown()
+      唤醒所有等待这个 latch 的线程
+      
+      ⚠️ 关键：EventLoop 线程和业务线程1
+      访问的是同一个 Latch1 对象
+    end note
+    
+    Latch1 -> Thread1: 唤醒 Thread1
+    note right of Thread1
+      **业务线程1 被唤醒**
+      从 WAITING 状态变为 RUNNABLE
+      继续执行 waitResponse() 后续代码
+    end note
+    
+    Latch1 --> Future1: 唤醒完成
+    deactivate Latch1
+    Future1 -> Table: remove(1)
+    activate Table
+    Table --> Future1: 移除成功
+    deactivate Table
+    Future1 --> ClientHandler: 响应已设置
+    deactivate Future1
+    
+    ClientHandler --> EventLoopThread: 处理完成
+    deactivate ClientHandler
+end
+
+group 响应2到达
+    EventLoopThread -> ClientHandler: channelRead(response2, opaque=2)
+    activate ClientHandler
+    
+    ClientHandler -> Table: getFuture(opaque=2)
+    activate Table
+    Table --> ClientHandler: ResponseFuture2 (共享对象)
+    deactivate Table
+    
+    ClientHandler -> Future2: putResponse(response2)
+    activate Future2
+    Future2 -> Future2: this.iRpcResponse = response2
+    Future2 -> Latch2: countDown()
+    activate Latch2
+    note right of Latch2
+      **EventLoop 线程唤醒业务线程2**
+      CountDownLatch.countDown()
+      唤醒所有等待这个 latch 的线程
+    end note
+    
+    Latch2 -> Thread2: 唤醒 Thread2
+    note right of Thread2
+      **业务线程2 被唤醒**
+      从 WAITING 状态变为 RUNNABLE
+      继续执行 waitResponse() 后续代码
+    end note
+    
+    Latch2 --> Future2: 唤醒完成
+    deactivate Latch2
+    Future2 -> Table: remove(2)
+    activate Table
+    Table --> Future2: 移除成功
+    deactivate Table
+    Future2 --> ClientHandler: 响应已设置
+    deactivate Future2
+    
+    ClientHandler --> EventLoopThread: 处理完成
+    deactivate ClientHandler
+end
+
+== 业务线程获取结果 ==
+
+Thread1 -> Future1: waitResponse() 返回
+activate Future1
+Future1 --> Thread1: IRpcResponse1
+deactivate Future1
+
+Thread2 -> Future2: waitResponse() 返回
+activate Future2
+Future2 --> Thread2: IRpcResponse2
+deactivate Future2
+
+== 问题2：阻塞会影响下一个请求吗？ ==
+
+note over Thread1, Thread2
+  **场景1：同一个线程顺序调用（会阻塞）**
+  
+  Thread1:
+    请求1 → 阻塞等待响应1 (100ms)
+    请求2 → 阻塞等待响应2 (100ms)  ← 必须等待请求1完成
+  
+  总耗时：200ms
+  吞吐量：2 请求/200ms = 10 请求/秒
+end note
+
+note over Thread1, Thread2
+  **场景2：不同线程并发调用（不会阻塞）**
+  
+  Thread1: 请求1 → 阻塞等待响应1 (100ms)
+  Thread2: 请求2 → 阻塞等待响应2 (100ms)  ← 并发执行，互不影响
+  
+  总耗时：100ms（最慢的请求）
+  吞吐量：2 请求/100ms = 20 请求/秒
+end note
+
+== CountDownLatch 对象共享机制 ==
+
+note over Future1, Latch1
+  **对象共享关系：**
+  
+  ResponseFuture1 {
+    opaque = 1
+    latch = CountDownLatch1  ←─── 共享对象
+    iRpcResponse = null
+  }
+  
+  ┌─────────────────┐
+  │ CountDownLatch1 │  ←─── 多个线程可以访问
+  └─────────────────┘
+         │      │
+    Thread1  EventLoopThread
+    await()  countDown()
+    (阻塞)   (唤醒)
+end note
+
+== 总结 ==
+
+note over Thread1, Latch2
+  **问题1：为什么可以跨线程唤醒？**
+  
+  ✅ 通过共享的 CountDownLatch 对象实现跨线程通信
+  - ResponseFuture 存储在 FUTURE_TABLE 中，可以被多个线程访问
+  - CountDownLatch 是线程安全的共享对象
+  - 业务线程调用 await() 阻塞，EventLoop 线程调用 countDown() 唤醒
+  - 底层使用操作系统的线程同步机制
+  
+  **问题2：阻塞会影响下一个请求吗？**
+  
+  ✅ 取决于调用场景
+  - 同一个线程顺序调用：会阻塞，下一个请求必须等待
+  - 不同线程并发调用：不会阻塞，每个请求独立执行
+  - 线程池并发调用：不会阻塞，多个请求可以并发执行
+end note
+
+@enduml

@@ -17,6 +17,7 @@
 
 package org.apache.dolphinscheduler.extract.base.server;
 
+import io.netty.channel.ChannelHandlerContext;
 import org.apache.dolphinscheduler.extract.base.RpcService;
 import org.apache.dolphinscheduler.extract.base.config.NettyServerConfig;
 
@@ -124,6 +125,8 @@ public class SpringServerMethodInvokerDiscovery extends RpcServer implements Bea
      * 1. 在 start() 时扫描已存在的 bean：处理在 RPC 服务器启动前已初始化的 bean（如 WorkflowControlClient）
      * 2. 在 postProcessAfterInitialization() 中注册：处理在 RPC 服务器启动后才初始化的 bean
      * 这样可确保所有 RPC 服务 bean 都被正确注册，无论初始化顺序如何。
+     *
+     * 例如: {@link org.apache.dolphinscheduler.extract.master.IWorkflowControlClient#manualTriggerWorkflow(org.apache.dolphinscheduler.extract.master.transportor.workflow.WorkflowManualTriggerRequest)}
      */
     private void scanAndRegisterExistingRpcServices() {
         Map<String, Object> allBeans = applicationContext.getBeansOfType(Object.class);
@@ -137,6 +140,7 @@ public class SpringServerMethodInvokerDiscovery extends RpcServer implements Bea
             // Check if the bean is an RPC service bean and not already registered
             // This avoids duplicate registration and unnecessary calls
             if (isRpcServiceBean(bean) && !registeredBeans.contains(bean)) {
+                /** 方法反射注册,服务端接收请求 {@link JdkDynamicServerHandler#channelRead(ChannelHandlerContext, Object)} */
                 registerServerMethodInvokerProvider(bean);
                 registeredBeans.add(bean);
                 registeredCount++;

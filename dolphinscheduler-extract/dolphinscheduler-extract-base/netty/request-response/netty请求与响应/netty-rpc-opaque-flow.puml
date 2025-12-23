@@ -1,0 +1,145 @@
+@startuml Netty RPC opaque 机制流程图
+
+!theme plain
+skinparam activity {
+    BackgroundColor lightblue
+    BorderColor black
+    FontSize 12
+}
+
+title opaque 请求-响应匹配机制流程图
+
+start
+
+partition "客户端：发送请求" {
+    :客户端调用 RPC 方法;
+    
+    :创建 TransporterHeader;
+    note right
+      **生成唯一 opaque**
+      TransporterHeader.of(methodIdentifier)
+      → REQUEST_ID.getAndIncrement()
+      → opaque = 1 (假设)
+    end note
+    
+    :创建 Transporter;
+    note right
+      **请求包含：**
+      - opaque = 1
+      - methodIdentifier
+      - body (参数)
+    end note
+    
+    :创建 ResponseFuture;
+    note right
+      **构造函数：**
+      ResponseFuture(opaque=1, timeout)
+      → FUTURE_TABLE.put(1, this)
+    end note
+    
+    :存储到 FUTURE_TABLE;
+    note right
+      **全局表：**
+      FUTURE_TABLE = {
+        1 -> ResponseFuture1
+      }
+    end note
+    
+    :通过 Channel 发送请求;
+    note right
+      channel.writeAndFlush(transporter)
+      请求中包含 opaque = 1
+    end note
+    
+    :阻塞等待响应;
+    note right
+      future.waitResponse()
+      CountDownLatch.await()
+    end note
+}
+
+partition "服务端：处理请求" {
+    :接收请求;
+    note right
+      channelRead(Transporter)
+      请求中包含 opaque = 1
+    end note
+    
+    :提取 opaque;
+    note right
+      transporter.getHeader().getOpaque()
+      → opaque = 1
+    end note
+    
+    :执行方法调用;
+    note right
+      methodInvoker.invoke(args)
+      执行业务逻辑
+    end note
+    
+    :构建响应;
+    note right
+      **关键：使用请求的 opaque**
+      TransporterHeader.of(
+        transporter.getHeader().getOpaque(),  // opaque = 1
+        methodIdentifier
+      )
+    end note
+    
+    :通过 Channel 发送响应;
+    note right
+      channel.writeAndFlush(response)
+      响应中包含 opaque = 1
+    end note
+}
+
+partition "客户端：接收响应" {
+    :接收响应;
+    note right
+      channelRead(Transporter)
+      响应中包含 opaque = 1
+    end note
+    
+    :提取 opaque;
+    note right
+      transporter.getHeader().getOpaque()
+      → opaque = 1
+    end note
+    
+    :查找 ResponseFuture;
+    note right
+      ResponseFuture.getFuture(1)
+      → FUTURE_TABLE.get(1)
+      → ResponseFuture1
+    end note
+    
+    if (ResponseFuture 存在?) then (是)
+        :设置响应;
+        note right
+          future.setIRpcResponse(response)
+          future.putResponse(response)
+        end note
+        
+        :唤醒等待线程;
+        note right
+          CountDownLatch.countDown()
+          waitResponse() 返回
+        end note
+        
+        :从 FUTURE_TABLE 移除;
+        note right
+          FUTURE_TABLE.remove(1)
+        end note
+        
+        :返回结果;
+    else (否)
+        :记录警告日志;
+        note right
+          "Cannot find the ResponseFuture"
+        end note
+    endif
+}
+
+stop
+
+@enduml

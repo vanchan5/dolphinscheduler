@@ -67,14 +67,22 @@ class NettyRemotingServer {
 
     private final AtomicBoolean isStarted = new AtomicBoolean(false);
 
+    /**
+     * 初始化远程服务 {@link org.apache.dolphinscheduler.server.master.rpc.MasterRpcServer#MasterRpcServer(org.apache.dolphinscheduler.server.master.config.MasterConfig)}
+     * @param serverConfig
+     */
     NettyRemotingServer(final NettyServerConfig serverConfig) {
         this.serverConfig = serverConfig;
         this.serverName = serverConfig.getServerName();
+        // 方法回调处理线程
         this.methodInvokerExecutor = ThreadUtils.newDaemonFixedThreadExecutor(
                 serverName + "-methodInvoker-%d", Runtime.getRuntime().availableProcessors() * 2 + 1);
+        // 远程调用处理
         this.channelHandler = new JdkDynamicServerHandler(methodInvokerExecutor);
+        // 接收请求
         ThreadFactory bossThreadFactory =
                 ThreadUtils.newDaemonThreadFactory(serverName + "-boss-%d");
+        // 请求处理
         ThreadFactory workerThreadFactory =
                 ThreadUtils.newDaemonThreadFactory(serverName + "-worker-%d");
         if (Epoll.isAvailable()) {
@@ -130,12 +138,23 @@ class NettyRemotingServer {
      * init netty channel
      *
      * @param ch socket channel
+     *
+     * 服务启动不会调用这个方法
+     * 新的客户端连接调用,服务端创建新的channel与客户端的channel进行通信,同一个TCP连接,互相通信
+     *
+     * SocketChannel对象 [id: 0x8d360468, L:/172.25.42.14:5678 - R:/172.25.42.14:53543]
+     *           L: 服务端
+     *           R: 客户端
      */
     private void initNettyChannel(SocketChannel ch) {
         ch.pipeline()
                 .addLast("encoder", new TransporterEncoder())
                 .addLast("decoder", new TransporterDecoder())
                 .addLast("server-idle-handle",
+                        // 服务端：60 秒未收到数据,触发 READER_IDLE 事件,服务端
+                        // org.apache.dolphinscheduler.extract.base.server.JdkDynamicServerHandler.userEventTriggered
+                        // 调用 ctx.close(),客户端收到连接关闭信号
+                        // 客户端触发 channelInactive() -》客户端的eventLoop线程的handler(NettyClientHandler)调用channelInactive方法
                         new IdleStateHandler(serverConfig.getConnectionIdleTime(), 0, 0, TimeUnit.MILLISECONDS))
                 .addLast("handler", channelHandler);
     }

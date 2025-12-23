@@ -54,6 +54,11 @@ class JdkDynamicServerHandler extends ChannelInboundHandlerAdapter {
         this.methodInvokerMap = new ConcurrentHashMap<>();
     }
 
+    // 当通道就绪, 执⾏ channelActive 函数
+    @Override
+    public void channelActive(ChannelHandlerContext ctx)throws Exception {
+        System.out.println("Client " + ctx.channel().remoteAddress() + " connected");
+    }
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         ctx.channel().close();
@@ -67,7 +72,7 @@ class JdkDynamicServerHandler extends ChannelInboundHandlerAdapter {
     public void registerMethodInvoker(ServerMethodInvoker methodInvoker) {
         checkNotNull(methodInvoker);
         checkNotNull(methodInvoker.getMethodIdentify());
-
+        // 保持客户端(请求)的 transporter.getHeader().getMethodIdentifier()唯一的方法识别一致,获取服务端对应的方法回调
         methodInvokerMap.put(methodInvoker.getMethodIdentify(), methodInvoker);
     }
 
@@ -133,6 +138,12 @@ class JdkDynamicServerHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
+    /**
+
+     *
+     * @param ctx
+     * @param cause
+     */
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         log.error("exceptionCaught : {}", cause.getMessage(), cause);
@@ -159,10 +170,18 @@ class JdkDynamicServerHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
+    /**
+     * 服务端 60 秒未收到数据 -》触发 READER_IDLE 事件 -》服务端调用 ctx.close() -》客户端收到连接关闭信号
+     * -》客户端触发 channelInactive()
+     * @param ctx
+     * @param evt
+     * @throws Exception
+     */
     @Override
     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
         if (evt instanceof IdleStateEvent) {
             IdleStateEvent event = (IdleStateEvent) evt;
+            // 读空闲时间 READER_IDLE
             if (event.state() == IdleState.READER_IDLE) {
                 log.warn("Not receive heart beat from: {}, will close the channel", ctx.channel().remoteAddress());
                 ctx.close();
