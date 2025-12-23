@@ -1,0 +1,56 @@
+@startuml 触发后续任务和工作流完成（第四部分）
+
+!theme plain
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 50
+
+participant "EventBus" as EventBus
+participant "FireWorker" as Worker
+participant "TopologyHandler" as Handler
+participant "RunningAction" as Action
+participant "Graph" as Graph
+participant "DB" as DB
+
+== 触发后续任务 ==
+
+Worker -> EventBus: poll()
+EventBus --> Worker: WorkflowTopologyLogicalTransitionEvent
+
+Worker -> Handler: handle(workflowRunnable, event)
+Handler -> Handler: 选择 WorkflowRunningStateAction
+Handler -> Action: topologyLogicalTransitionEventAction(...)
+
+Action -> Graph: getSuccessors(taskRunnable)
+Graph --> Action: 后续任务列表
+
+Action -> Graph: isTriggerConditionMet(successors)
+Graph --> Action: true (前置任务已完成)
+
+Action -> EventBus: publish(TaskStartLifecycleEvent)
+note right of Action: 回到第二部分，触发后续任务\n循环执行直到所有任务完成
+
+== 工作流完成 ==
+
+note over Action: 当所有任务都完成时
+
+Action -> Graph: isAllTaskExecutionRunnableChainFinish()?
+Graph --> Action: true
+
+Action -> Graph: isAllTaskExecutionRunnableChainSuccess()?
+Graph --> Action: true
+
+Action -> EventBus: publish(WorkflowSucceedLifecycleEvent)
+
+Worker -> EventBus: poll()
+EventBus --> Worker: WorkflowSucceedLifecycleEvent
+
+Worker -> Handler: handle(workflowRunnable, event)
+Handler -> Action: succeedEventAction(...)
+
+Action -> DB: updateById(状态: SUCCESS, endTime)
+Action -> EventBus: publish(WorkflowFinalizeLifecycleEvent)
+
+Action --> Handler: 工作流完成
+Handler --> Worker: 处理完成
+
+@enduml

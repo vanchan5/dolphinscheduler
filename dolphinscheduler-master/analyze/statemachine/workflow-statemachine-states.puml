@@ -1,0 +1,177 @@
+@startuml 工作流和任务状态机状态转换图
+
+!theme plain
+skinparam state {
+    BackgroundColor lightblue
+    BorderColor black
+    FontSize 12
+}
+
+title 工作流状态机状态转换图
+
+state "工作流状态转换" as WorkflowStates {
+    [*] --> SUBMITTED_SUCCESS : 创建工作流实例
+    
+    SUBMITTED_SUCCESS --> RUNNING_EXECUTION : WorkflowStartLifecycleEvent\n(RunWorkflowCommandHandler)
+    
+    RUNNING_EXECUTION : 运行中状态
+    RUNNING_EXECUTION : 可以触发任务
+    RUNNING_EXECUTION : 可以处理任务完成事件
+    
+    RUNNING_EXECUTION --> READY_PAUSE : WorkflowPauseLifecycleEvent
+    RUNNING_EXECUTION --> READY_STOP : WorkflowStopLifecycleEvent
+    RUNNING_EXECUTION --> SUCCESS : 所有任务成功完成
+    RUNNING_EXECUTION --> FAILURE : 存在失败任务
+    
+    READY_PAUSE --> PAUSE : 所有任务暂停完成
+    READY_STOP --> STOP : 所有任务停止完成
+    
+    PAUSE --> RUNNING_EXECUTION : 恢复执行
+    STOP --> [*] : 工作流结束
+    
+    SUCCESS --> [*] : WorkflowFinalizeLifecycleEvent
+    FAILURE --> [*] : WorkflowFinalizeLifecycleEvent
+    
+    note right of RUNNING_EXECUTION
+        **WorkflowRunningStateAction**
+        - startEventAction: 触发起始任务
+        - topologyLogicalTransitionEventAction: 触发后续任务
+        - succeedEventAction: 工作流成功
+        - failedEventAction: 工作流失败
+    end note
+}
+
+title 任务状态机状态转换图
+
+state "任务状态转换" as TaskStates {
+    [*] --> SUBMITTED_SUCCESS : TaskStartLifecycleEvent\n初始化 TaskInstance
+    
+    SUBMITTED_SUCCESS : 已提交状态
+    SUBMITTED_SUCCESS : TaskSubmittedStateAction
+    SUBMITTED_SUCCESS : 可以分发到 Worker
+    
+    SUBMITTED_SUCCESS --> DELAY_EXECUTION : 有延迟时间
+    SUBMITTED_SUCCESS --> DISPATCH : TaskDispatchLifecycleEvent\n分发到 Worker
+    
+    DELAY_EXECUTION --> DISPATCH : 延迟时间到期
+    
+    DISPATCH : 已分发状态
+    DISPATCH : TaskDispatchStateAction
+    DISPATCH : 已发送到 Worker
+    
+    DISPATCH --> RUNNING_EXECUTION : Worker 开始执行\nTaskRunningLifecycleEvent
+    
+    RUNNING_EXECUTION : 运行中状态
+    RUNNING_EXECUTION : TaskRunningStateAction
+    RUNNING_EXECUTION : Worker 正在执行任务
+    
+    RUNNING_EXECUTION --> SUCCESS : 任务执行成功\nTaskSuccessLifecycleEvent
+    RUNNING_EXECUTION --> FAILURE : 任务执行失败\nTaskFailedLifecycleEvent
+    RUNNING_EXECUTION --> PAUSE : 任务被暂停\nTaskPausedLifecycleEvent
+    RUNNING_EXECUTION --> KILL : 任务被杀死\nTaskKilledLifecycleEvent
+    
+    SUCCESS --> [*] : 任务完成
+    FAILURE --> [*] : 任务失败
+    PAUSE --> [*] : 任务暂停
+    KILL --> [*] : 任务被杀死
+    
+    note right of SUBMITTED_SUCCESS
+        **TaskSubmittedStateAction**
+        - startEventAction: 尝试分发任务
+        - dispatchEventAction: 任务入队
+    end note
+    
+    note right of RUNNING_EXECUTION
+        **TaskRunningStateAction**
+        - startedEventAction: 更新任务运行信息
+        - 接收 Worker 的状态更新
+    end note
+}
+
+title 事件处理流程
+
+state "事件处理流程" as EventFlow {
+    state "事件发布" as Publish {
+        [*] --> EventBus
+        EventBus : WorkflowEventBus
+        EventBus : DelayQueue<AbstractLifecycleEvent>
+    }
+    
+    state "事件分发" as Dispatch {
+        EventBus --> FireWorker : poll() 每100ms
+        FireWorker : WorkflowEventBusFireWorker
+        FireWorker : eventHandlerMap.get(eventType)
+    }
+    
+    state "EventHandler处理" as Handler {
+        FireWorker --> EventHandler : handle(workflowRunnable, event)
+        EventHandler : ILifecycleEventHandler
+        EventHandler : 根据事件类型选择Handler
+    }
+    
+    state "StateAction执行" as Action {
+        EventHandler --> StateFactory : getAction(currentState)
+        StateFactory : WorkflowStateActionFactory
+        StateFactory : TaskStateActionFactory
+        StateFactory --> StateAction : 根据状态选择Action
+        StateAction : IWorkflowStateAction
+        StateAction : ITaskStateAction
+        StateAction --> [*] : 执行具体业务逻辑
+    }
+    
+    Publish --> Dispatch
+    Dispatch --> Handler
+    Handler --> Action
+}
+
+title 完整执行流程
+
+state "完整执行流程" as CompleteFlow {
+    state "1. 工作流启动" as Step1 {
+        CommandEngine --> CreateWorkflow : 创建 WorkflowExecutionRunnable
+        CreateWorkflow --> PublishStart : 发布 WorkflowStartLifecycleEvent
+    }
+    
+    state "2. 触发任务" as Step2 {
+        PublishStart --> SelectAction : 选择 WorkflowRunningStateAction
+        SelectAction --> TriggerTasks : triggerTasks()
+        TriggerTasks --> PublishTaskStart : 发布 TaskStartLifecycleEvent
+    }
+    
+    state "3. 任务启动" as Step3 {
+        PublishTaskStart --> InitTask : 初始化 TaskInstance
+        InitTask --> SelectTaskAction : 选择 TaskSubmittedStateAction
+        SelectTaskAction --> DispatchTask : 发布 TaskDispatchLifecycleEvent
+    }
+    
+    state "4. 任务分发" as Step4 {
+        DispatchTask --> Enqueue : 任务入队
+        Enqueue --> SendToWorker : 分发到 Worker
+    }
+    
+    state "5. 任务执行" as Step5 {
+        SendToWorker --> Execute : Worker 执行任务
+        Execute --> TaskFinish : 任务完成
+    }
+    
+    state "6. 触发后续任务" as Step6 {
+        TaskFinish --> PublishTopology : 发布拓扑转换事件
+        PublishTopology --> TriggerNext : 触发后续任务
+        TriggerNext --> Step2 : 回到步骤2
+    }
+    
+    state "7. 工作流完成" as Step7 {
+        TriggerNext --> CheckFinish : 检查是否所有任务完成
+        CheckFinish --> PublishSuccess : 发布 WorkflowSucceedLifecycleEvent
+        PublishSuccess --> Finalize : 工作流最终化
+    }
+    
+    Step1 --> Step2
+    Step2 --> Step3
+    Step3 --> Step4
+    Step4 --> Step5
+    Step5 --> Step6
+    Step6 --> Step7
+}
+
+@enduml

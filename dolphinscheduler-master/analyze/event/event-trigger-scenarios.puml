@@ -1,0 +1,258 @@
+@startuml 事件触发场景示例图
+
+!theme plain
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 50
+
+title 事件触发场景示例
+
+== 场景1: 工作流启动事件触发 ==
+
+participant "CommandEngine" as Engine
+participant "WorkflowEventBus" as EventBus
+participant "DelayQueue" as Queue
+participant "WorkflowEventBusFireWorker" as FireWorker
+participant "WorkflowStartLifecycleEventHandler" as StartHandler
+participant "WorkflowRunningStateAction" as RunningAction
+
+Engine -> EventBus: publish(WorkflowStartLifecycleEvent)
+activate EventBus
+EventBus -> Queue: delayEventQueue.add(event)
+activate Queue
+Queue --> EventBus: 事件已入队
+deactivate Queue
+EventBus --> Engine: 立即返回
+deactivate EventBus
+
+note over Engine: **事件发布完成，继续其他操作**
+
+... 100ms后 ...
+
+FireWorker -> Queue: poll()
+activate Queue
+Queue --> FireWorker: WorkflowStartLifecycleEvent
+deactivate Queue
+
+FireWorker -> FireWorker: eventHandlerMap.get(START)
+FireWorker -> StartHandler: handle(workflowRunnable, event)
+activate StartHandler
+
+StartHandler -> RunningAction: startEventAction(...)
+activate RunningAction
+RunningAction -> RunningAction: triggerTasks()
+RunningAction -> EventBus: publish(TaskStartLifecycleEvent)
+activate EventBus
+EventBus -> Queue: delayEventQueue.add(newEvent)
+activate Queue
+Queue --> EventBus: 新事件已入队
+deactivate Queue
+EventBus --> RunningAction: 立即返回
+deactivate EventBus
+
+RunningAction --> StartHandler: 处理完成
+deactivate RunningAction
+StartHandler --> FireWorker: 处理完成
+deactivate StartHandler
+
+== 场景2: Worker回调事件触发 ==
+
+participant "Worker" as Worker
+participant "RPC" as RPC
+participant "TaskExecutorEventListenerImpl" as Listener
+participant "WorkflowEventBus" as EventBus2
+participant "DelayQueue" as Queue2
+participant "WorkflowEventBusFireWorker" as FireWorker2
+participant "TaskSuccessLifecycleEventHandler" as SuccessHandler
+participant "TaskRunningStateAction" as TaskRunningAction
+
+Worker -> Worker: 任务执行成功
+Worker -> RPC: 调用 Master\nonTaskExecutorSuccess(event)
+activate RPC
+
+RPC -> Listener: onTaskExecutorSuccess(event)
+activate Listener
+
+Listener -> Listener: getTaskExecutionRunnable(event)
+Listener -> Listener: 构建 TaskSuccessLifecycleEvent
+
+Listener -> EventBus2: publish(TaskSuccessLifecycleEvent)
+activate EventBus2
+EventBus2 -> Queue2: delayEventQueue.add(event)
+activate Queue2
+Queue2 --> EventBus2: 事件已入队
+deactivate Queue2
+EventBus2 --> Listener: 立即返回
+deactivate EventBus2
+
+Listener --> RPC: 回调完成
+deactivate Listener
+RPC --> Worker: RPC 调用返回
+deactivate RPC
+
+note over Worker: **Worker 继续其他操作，不等待事件处理**
+
+... 100ms后 ...
+
+FireWorker2 -> Queue2: poll()
+activate Queue2
+Queue2 --> FireWorker2: TaskSuccessLifecycleEvent
+deactivate Queue2
+
+FireWorker2 -> FireWorker2: eventHandlerMap.get(SUCCEEDED)
+FireWorker2 -> SuccessHandler: handle(workflowRunnable, event)
+activate SuccessHandler
+
+SuccessHandler -> TaskRunningAction: succeedEventAction(...)
+activate TaskRunningAction
+
+TaskRunningAction -> TaskRunningAction: 更新任务状态为 SUCCESS
+TaskRunningAction -> TaskRunningAction: 发布拓扑转换事件
+TaskRunningAction -> EventBus2: publish(WorkflowTopologyLogicalTransitionEvent)
+activate EventBus2
+EventBus2 -> Queue2: delayEventQueue.add(newEvent)
+activate Queue2
+Queue2 --> EventBus2: 新事件已入队
+deactivate Queue2
+EventBus2 --> TaskRunningAction: 立即返回
+deactivate EventBus2
+
+TaskRunningAction --> SuccessHandler: 处理完成
+deactivate TaskRunningAction
+SuccessHandler --> FireWorker2: 处理完成
+deactivate SuccessHandler
+
+== 场景3: 事件链式触发 ==
+
+participant "StateAction1" as Action1
+participant "WorkflowEventBus" as EventBus3
+participant "DelayQueue" as Queue3
+participant "WorkflowEventBusFireWorker" as FireWorker3
+participant "EventHandler1" as Handler1
+participant "StateAction2" as Action2
+participant "EventHandler2" as Handler2
+participant "StateAction3" as Action3
+
+Action1 -> EventBus3: publish(Event1)
+activate EventBus3
+EventBus3 -> Queue3: add(Event1)
+activate Queue3
+Queue3 --> EventBus3: 已入队
+deactivate Queue3
+EventBus3 --> Action1: 立即返回
+deactivate EventBus3
+
+... 100ms后 ...
+
+FireWorker3 -> Queue3: poll() → Event1
+FireWorker3 -> Handler1: handle(Event1)
+activate Handler1
+Handler1 -> Action2: 执行业务逻辑
+activate Action2
+
+Action2 -> EventBus3: publish(Event2)
+activate EventBus3
+EventBus3 -> Queue3: add(Event2)
+activate Queue3
+Queue3 --> EventBus3: 已入队
+deactivate Queue3
+EventBus3 --> Action2: 立即返回
+deactivate EventBus3
+
+Action2 --> Handler1: 处理完成
+deactivate Action2
+Handler1 --> FireWorker3: 处理完成
+deactivate Handler1
+
+note over FireWorker3: **继续处理队列中的 Event2**
+
+FireWorker3 -> Queue3: poll() → Event2
+FireWorker3 -> Handler2: handle(Event2)
+activate Handler2
+Handler2 -> Action3: 执行业务逻辑
+activate Action3
+
+Action3 -> EventBus3: publish(Event3)
+activate EventBus3
+EventBus3 -> Queue3: add(Event3)
+activate Queue3
+Queue3 --> EventBus3: 已入队
+deactivate Queue3
+EventBus3 --> Action3: 立即返回
+deactivate EventBus3
+
+Action3 --> Handler2: 处理完成
+deactivate Action3
+Handler2 --> FireWorker3: 处理完成
+deactivate Handler2
+
+note over FireWorker3: **事件链式触发，形成完整的执行流程**
+
+== 场景4: 异常处理和重试 ==
+
+participant "WorkflowEventBusFireWorker" as FireWorker4
+participant "EventHandler" as Handler4
+participant "StateAction" as Action4
+participant "Database" as DB4
+participant "WorkflowEventBus" as EventBus4
+participant "DelayQueue" as Queue4
+
+FireWorker4 -> Handler4: handle(workflow, event)
+activate Handler4
+Handler4 -> Action4: 执行业务逻辑
+activate Action4
+
+Action4 -> DB4: updateById(...)
+activate DB4
+DB4 --> Action4: **异常：数据库连接失败**
+deactivate DB4
+
+Action4 --> Handler4: 抛出异常
+deactivate Action4
+Handler4 --> FireWorker4: 异常传播
+deactivate Handler4
+
+FireWorker4 -> FireWorker4: catch Exception
+FireWorker4 -> FireWorker4: isDatabaseConnectedFailedException(ex)?
+
+alt 数据库连接失败
+    FireWorker4 -> EventBus4: publish(event)
+    activate EventBus4
+    note right of EventBus4: **重新发布事件，等待重试**
+    EventBus4 -> Queue4: delayEventQueue.add(event)
+    activate Queue4
+    Queue4 --> EventBus4: 事件已重新入队
+    deactivate Queue4
+    EventBus4 --> FireWorker4: 重新发布成功
+    deactivate EventBus4
+    
+    FireWorker4 -> FireWorker4: ThreadUtils.sleep(5_000)
+    note right of FireWorker4: **等待5秒后重试**
+    
+    ... 5秒后，继续轮询 ...
+    
+    FireWorker4 -> Queue4: poll() → event (重试)
+    note over FireWorker4: **事件被重新处理**
+    
+else 其他异常
+    FireWorker4 -> FireWorker4: 记录失败计数
+    FireWorker4 -> FireWorker4: throw WorkflowEventFireException
+end
+
+== 总结 ==
+
+note over Action1, Queue4
+  **事件触发机制的关键特点：**
+  
+  1. **异步非阻塞**：publish() 立即返回
+  2. **定时轮询**：每100ms轮询一次
+  3. **类型映射**：根据事件类型快速找到 Handler
+  4. **链式触发**：事件可以触发新事件
+  5. **异常重试**：数据库连接失败时自动重试
+  6. **多线程处理**：多个 Worker 并行处理
+  
+  **事件来源：**
+  - 内部：Master 内部组件
+  - 外部：Worker RPC 回调
+end note
+
+@enduml

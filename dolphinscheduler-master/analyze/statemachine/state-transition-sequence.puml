@@ -1,0 +1,274 @@
+@startuml 状态变更机制时序图
+
+!theme plain
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 60
+
+participant "Event" as Event
+participant "WorkflowEventBus" as EventBus
+participant "WorkflowEventBusFireWorker" as FireWorker
+participant "EventHandler" as Handler
+participant "StateActionFactory" as Factory
+participant "StateAction" as Action
+participant "WorkflowInstance/TaskInstance" as Instance
+participant "InstanceDao" as Dao
+participant "Database" as DB
+
+== 工作流状态变更流程 ==
+
+note over Event, DB: **工作流状态变更：RUNNING_EXECUTION → SUCCESS**
+
+Event -> EventBus: publish(WorkflowSucceedLifecycleEvent)
+activate EventBus
+EventBus -> EventBus: delayEventQueue.add(event)
+deactivate EventBus
+
+FireWorker -> EventBus: poll()
+activate EventBus
+EventBus --> FireWorker: WorkflowSucceedLifecycleEvent
+deactivate EventBus
+
+FireWorker -> Handler: handle(workflowRunnable, event)
+activate Handler
+
+Handler -> Factory: getAction(workflowRunnable.getState())
+activate Factory
+note right of Factory: 当前状态: RUNNING_EXECUTION\n返回: WorkflowRunningStateAction
+Factory --> Handler: WorkflowRunningStateAction
+deactivate Factory
+
+Handler -> Action: succeedEventAction(workflowRunnable, event)
+activate Action
+
+Action -> Action: workflowFinish(workflowRunnable, SUCCESS)
+Action -> Instance: setState(SUCCESS)
+activate Instance
+note right of Instance: **状态变更：内存中更新**
+Instance --> Action: 状态已更新
+deactivate Instance
+
+Action -> Dao: updateById(workflowInstance)
+activate Dao
+Dao -> DB: UPDATE t_ds_process_instance\nSET state = SUCCESS\nWHERE id = ?
+activate DB
+DB --> Dao: 更新成功
+deactivate DB
+Dao --> Action: 更新成功
+deactivate Dao
+
+Action -> Action: log.info("state from RUNNING_EXECUTION to SUCCESS")
+Action --> Handler: 状态变更完成
+deactivate Action
+
+Handler --> FireWorker: 处理完成
+deactivate Handler
+
+== 任务状态变更流程 ==
+
+note over Event, DB: **任务状态变更：SUBMITTED_SUCCESS → DISPATCH → RUNNING_EXECUTION → SUCCESS**
+
+group 阶段1: SUBMITTED_SUCCESS → DISPATCH
+
+    Event -> EventBus: publish(TaskDispatchedLifecycleEvent)
+    activate EventBus
+    EventBus -> EventBus: delayEventQueue.add(event)
+    deactivate EventBus
+    
+    FireWorker -> EventBus: poll()
+    activate EventBus
+    EventBus --> FireWorker: TaskDispatchedLifecycleEvent
+    deactivate EventBus
+    
+    FireWorker -> Handler: handle(workflowRunnable, event)
+    activate Handler
+    
+    Handler -> Factory: getTaskStateAction(taskInstance.getState())
+    activate Factory
+    note right of Factory: 当前状态: SUBMITTED_SUCCESS\n返回: TaskSubmittedStateAction
+    Factory --> Handler: TaskSubmittedStateAction
+    deactivate Factory
+    
+    Handler -> Action: dispatchedEventAction(workflowRunnable, taskRunnable, event)
+    activate Action
+    
+    Action -> Instance: setState(DISPATCH)
+    activate Instance
+    note right of Instance: **状态变更：内存中更新**
+    Instance --> Action: 状态已更新
+    deactivate Instance
+    
+    Action -> Instance: setHost(workerHost)
+    Action -> Dao: updateById(taskInstance)
+    activate Dao
+    Dao -> DB: UPDATE t_ds_task_instance\nSET state = DISPATCH, host = ?\nWHERE id = ?
+    activate DB
+    DB --> Dao: 更新成功
+    deactivate DB
+    Dao --> Action: 更新成功
+    deactivate Dao
+    
+    Action --> Handler: 状态变更完成
+    deactivate Action
+    Handler --> FireWorker: 处理完成
+    deactivate Handler
+
+end
+
+group 阶段2: DISPATCH → RUNNING_EXECUTION
+
+    note over Event: Worker 开始执行任务后\n通过 RPC 回调 Master
+    
+    Event -> EventBus: publish(TaskRunningLifecycleEvent)
+    activate EventBus
+    EventBus -> EventBus: delayEventQueue.add(event)
+    deactivate EventBus
+    
+    FireWorker -> EventBus: poll()
+    activate EventBus
+    EventBus --> FireWorker: TaskRunningLifecycleEvent
+    deactivate EventBus
+    
+    FireWorker -> Handler: handle(workflowRunnable, event)
+    activate Handler
+    
+    Handler -> Factory: getTaskStateAction(taskInstance.getState())
+    activate Factory
+    note right of Factory: 当前状态: DISPATCH\n返回: TaskDispatchStateAction
+    Factory --> Handler: TaskDispatchStateAction
+    deactivate Factory
+    
+    Handler -> Action: startedEventAction(workflowRunnable, taskRunnable, event)
+    activate Action
+    
+    Action -> Action: persistentTaskInstanceStartedEventToDB(...)
+    Action -> Instance: setState(RUNNING_EXECUTION)
+    activate Instance
+    note right of Instance: **状态变更：内存中更新**
+    Instance --> Action: 状态已更新
+    deactivate Instance
+    
+    Action -> Instance: setStartTime(event.getStartTime())
+    Action -> Instance: setLogPath(event.getLogPath())
+    Action -> Dao: updateById(taskInstance)
+    activate Dao
+    Dao -> DB: UPDATE t_ds_task_instance\nSET state = RUNNING_EXECUTION,\n    start_time = ?, log_path = ?\nWHERE id = ?
+    activate DB
+    DB --> Dao: 更新成功
+    deactivate DB
+    Dao --> Action: 更新成功
+    deactivate Dao
+    
+    Action --> Handler: 状态变更完成
+    deactivate Action
+    Handler --> FireWorker: 处理完成
+    deactivate Handler
+
+end
+
+group 阶段3: RUNNING_EXECUTION → SUCCESS
+
+    note over Event: Worker 任务执行成功后\n通过 RPC 回调 Master
+    
+    Event -> EventBus: publish(TaskSuccessLifecycleEvent)
+    activate EventBus
+    EventBus -> EventBus: delayEventQueue.add(event)
+    deactivate EventBus
+    
+    FireWorker -> EventBus: poll()
+    activate EventBus
+    EventBus --> FireWorker: TaskSuccessLifecycleEvent
+    deactivate EventBus
+    
+    FireWorker -> Handler: handle(workflowRunnable, event)
+    activate Handler
+    
+    Handler -> Factory: getTaskStateAction(taskInstance.getState())
+    activate Factory
+    note right of Factory: 当前状态: RUNNING_EXECUTION\n返回: TaskRunningStateAction
+    Factory --> Handler: TaskRunningStateAction
+    deactivate Factory
+    
+    Handler -> Action: succeedEventAction(workflowRunnable, taskRunnable, event)
+    activate Action
+    
+    Action -> Action: persistentTaskInstanceSuccessEventToDB(...)
+    Action -> Instance: setState(SUCCESS)
+    activate Instance
+    note right of Instance: **状态变更：内存中更新**
+    Instance --> Action: 状态已更新
+    deactivate Instance
+    
+    Action -> Instance: setEndTime(event.getEndTime())
+    Action -> Instance: setVarPool(event.getVarPool())
+    Action -> Dao: updateById(taskInstance)
+    activate Dao
+    Dao -> DB: UPDATE t_ds_task_instance\nSET state = SUCCESS,\n    end_time = ?, var_pool = ?\nWHERE id = ?
+    activate DB
+    DB --> Dao: 更新成功
+    deactivate DB
+    Dao --> Action: 更新成功
+    deactivate Dao
+    
+    Action --> Handler: 状态变更完成
+    deactivate Action
+    Handler --> FireWorker: 处理完成
+    deactivate Handler
+
+end
+
+== 状态变更异常处理 ==
+
+note over Action, DB: **如果数据库更新失败，会回滚内存状态**
+
+Action -> Instance: setState(targetState)
+Action -> Dao: updateById(instance)
+activate Dao
+Dao -> DB: UPDATE ...
+activate DB
+DB --> Dao: **异常：更新失败**
+deactivate DB
+Dao --> Action: 抛出异常
+deactivate Dao
+
+Action -> Instance: setState(originState)
+activate Instance
+note right of Instance: **回滚：恢复原始状态**
+Instance --> Action: 状态已回滚
+deactivate Instance
+
+Action -> Action: throw ex
+
+== 状态验证机制 ==
+
+note over Action: **在状态变更前，会验证当前状态是否匹配**
+
+Action -> Action: throwExceptionIfStateIsNotMatch(taskRunnable)
+Action -> Instance: getState()
+activate Instance
+Instance --> Action: 当前状态: RUNNING_EXECUTION
+deactivate Instance
+
+Action -> Action: matchState()
+Action -> Action: 期望状态: DISPATCH
+
+alt 状态不匹配
+    Action -> Action: throw IllegalStateException\n("state is not match")
+else 状态匹配
+    Action -> Action: 继续执行状态变更
+end
+
+== 总结 ==
+
+note over Event, DB
+  **状态变更的关键点：**
+  
+  1. **事件驱动**：状态变更由事件触发
+  2. **StateAction 决定**：StateAction 根据业务逻辑决定何时变更状态
+  3. **同步更新**：同时更新内存和数据库
+  4. **异常回滚**：数据库更新失败时回滚内存状态
+  5. **状态验证**：变更前验证当前状态是否匹配
+  
+  **状态变更不是自动的，而是由 StateAction 主动设置！**
+end note
+
+@enduml

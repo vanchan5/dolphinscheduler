@@ -1,0 +1,334 @@
+@startuml Master执行流程时序图
+
+actor User as 用户
+participant "MasterServer" as Master
+participant "CommandEngine" as Engine
+participant "ICommandFetcher" as Fetcher
+participant "t_ds_command" as CommandDB
+participant "WorkflowExecutionRunnableFactory" as Factory
+participant "RunWorkflowCommandHandler" as Handler
+participant "t_ds_process_instance" as WorkflowDB
+participant "WorkflowExecutionRunnable" as WorkflowRunnable
+participant "WorkflowEventBusCoordinator" as Coordinator
+participant "WorkflowEventBusFireWorker" as FireWorker
+participant "WorkflowEventBus" as EventBus
+participant "WorkflowStartLifecycleEventHandler" as StartHandler
+participant "WorkflowStateActionFactory" as StateFactory
+participant "WorkflowRunningStateAction" as RunningAction
+participant "WorkflowExecutionGraph" as Graph
+participant "AbstractWorkflowStateAction" as AbstractAction
+participant "TaskExecutionRunnable" as TaskRunnable
+participant "t_ds_task_instance" as TaskDB
+participant "TaskStartLifecycleEventHandler" as TaskStartHandler
+participant "TaskSubmittedStateAction" as TaskSubmitted
+participant "GlobalTaskDispatchWaitingQueue" as DispatchQueue
+participant "GlobalTaskDispatchWaitingQueueLooper" as DispatchLooper
+participant "TaskExecutorClient" as TaskClient
+participant "PhysicalTaskExecutorClientDelegator" as PhysicalDelegator
+participant "IWorkerLoadBalancer" as LoadBalancer
+participant "Worker Server" as Worker
+
+== Master Server 启动阶段 ==
+
+activate Master
+Master -> Master: 启动 WorkflowEventBusFireWorkers
+activate FireWorker
+Master -> FireWorker: 注册所有 ILifecycleEventHandler\n(包括 WorkflowStartLifecycleEventHandler)
+FireWorker -> FireWorker: eventHandlerMap.put(eventType, handler)
+Master -> Master: 启动 CommandEngine
+activate Engine
+Engine -> Engine: 启动后台线程循环
+deactivate Master
+
+== 工作流触发阶段 ==
+
+User -> Master: 触发工作流
+activate Master
+Master -> CommandDB: 插入 WorkflowInstance 和 Command
+activate CommandDB
+CommandDB --> Master: 返回
+deactivate CommandDB
+deactivate Master
+
+== CommandEngine 扫描和处理 ==
+
+loop 每1秒扫描一次
+    Engine -> Fetcher: fetchCommands()
+    activate Fetcher
+    Fetcher -> CommandDB: SELECT * FROM t_ds_command
+    activate CommandDB
+    CommandDB --> Fetcher: 返回 Command 列表
+    deactivate CommandDB
+    Fetcher --> Engine: List<Command>
+    deactivate Fetcher
+    
+    alt 有 Command
+        Engine -> Factory: createWorkflowExecuteRunnable(command)
+        activate Factory
+        Factory -> Factory: deleteCommandOrThrow(command)
+        Factory -> Factory: 删除 Command 防止重复处理
+        Factory -> Handler: handleCommand(command)
+        activate Handler
+        
+        == 创建工作流执行上下文 ==
+        Handler -> Handler: assembleWorkflowDefinition()
+        Handler -> Handler: assembleProject()
+        Handler -> Handler: assembleWorkflowGraph()
+        Handler -> Handler: assembleWorkflowInstance()
+        activate Handler
+        Handler -> WorkflowDB: queryById(workflowInstanceId)
+        activate WorkflowDB
+        WorkflowDB --> Handler: WorkflowInstance
+        deactivate WorkflowDB
+        Handler -> Handler: setState(RUNNING_EXECUTION)
+        Handler -> WorkflowDB: upsertWorkflowInstance(workflowInstance)
+        activate WorkflowDB
+        WorkflowDB --> Handler: 更新成功
+        deactivate WorkflowDB
+        deactivate Handler
+        
+        Handler -> Handler: assembleWorkflowExecutionGraph()
+        Handler -> Graph: 创建 WorkflowExecutionGraph
+        activate Graph
+        Graph -> Graph: 遍历工作流图拓扑
+        loop 为每个任务节点
+            Graph -> TaskRunnable: 创建 TaskExecutionRunnable
+            activate TaskRunnable
+            TaskRunnable --> Graph: TaskExecutionRunnable
+            deactivate TaskRunnable
+        end
+        Graph --> Handler: WorkflowExecutionGraph
+        deactivate Graph
+        
+        Handler --> Factory: WorkflowExecutionRunnable
+        deactivate Handler
+        Factory --> Engine: WorkflowExecutionRunnable
+        deactivate Factory
+        
+        Engine -> Engine: bootstrapWorkflowExecutionRunnable()
+        Engine -> Engine: workflowRepository.put(workflowRunnable)
+        Engine -> Coordinator: registerWorkflowEventBus(workflowRunnable)
+        activate Coordinator
+        Coordinator -> Coordinator: 计算 workerSlot = workflowInstanceId % workerSize
+        Coordinator -> FireWorker: registerWorkflowEventBus(workflowRunnable)
+        activate FireWorker
+        FireWorker -> FireWorker: registeredWorkflowExecuteRunnableMap.put(id, runnable)
+        FireWorker --> Coordinator: 注册成功
+        deactivate FireWorker
+        Coordinator --> Engine: 注册成功
+        deactivate Coordinator
+        
+        == 发布工作流启动事件 ==
+        Engine -> EventBus: publish(WorkflowStartLifecycleEvent)
+        activate EventBus
+        EventBus -> EventBus: delayEventQueue.add(event)
+        EventBus --> Engine: 事件已发布
+        deactivate EventBus
+    end
+end
+
+== 事件总线处理阶段 ==
+
+loop 每100ms轮询一次
+    FireWorker -> FireWorker: fireAllRegisteredEvent()
+    FireWorker -> FireWorker: getWaitingFireWorkflowExecutionRunnables()
+    FireWorker -> EventBus: isEmpty()?
+    activate EventBus
+    EventBus --> FireWorker: false (有事件)
+    deactivate EventBus
+    
+    alt 有事件需要处理
+        FireWorker -> EventBus: poll()
+        activate EventBus
+        EventBus --> FireWorker: WorkflowStartLifecycleEvent
+        deactivate EventBus
+        
+        FireWorker -> FireWorker: doFireSingleEvent()
+        FireWorker -> FireWorker: eventHandlerMap.get(event.getEventType())
+        FireWorker -> StartHandler: handle(workflowRunnable, event)
+        activate StartHandler
+        
+        == 工作流状态机处理 ==
+        StartHandler -> StateFactory: getAction(workflowRunnable.getState())
+        activate StateFactory
+        StateFactory -> StateFactory: 根据 RUNNING_EXECUTION 状态
+        StateFactory --> StartHandler: WorkflowRunningStateAction
+        deactivate StateFactory
+        
+        StartHandler -> RunningAction: startEventAction(workflowRunnable, event)
+        activate RunningAction
+        RunningAction -> RunningAction: throwExceptionIfStateIsNotMatch()
+        RunningAction -> Graph: getStartNodes()
+        activate Graph
+        Graph --> RunningAction: List<TaskExecutionRunnable>
+        deactivate Graph
+        
+        RunningAction -> AbstractAction: triggerTasks(workflowRunnable, taskRunnables)
+        activate AbstractAction
+        
+        == 触发任务执行 ==
+        AbstractAction -> Graph: isTriggerConditionMet(taskRunnable)
+        activate Graph
+        Graph --> AbstractAction: true (满足触发条件)
+        deactivate Graph
+        
+        AbstractAction -> Graph: markTaskExecutionRunnableActive(taskRunnable)
+        AbstractAction -> EventBus: publish(TaskStartLifecycleEvent.of(taskRunnable))
+        activate EventBus
+        EventBus -> EventBus: delayEventQueue.add(event)
+        EventBus --> AbstractAction: 事件已发布
+        deactivate EventBus
+        
+        AbstractAction --> RunningAction: 任务已触发
+        deactivate AbstractAction
+        RunningAction --> StartHandler: 处理完成
+        deactivate RunningAction
+        StartHandler --> FireWorker: 处理完成
+        deactivate StartHandler
+    end
+end
+
+== 任务启动处理阶段 ==
+
+loop 事件总线继续轮询
+    FireWorker -> EventBus: poll()
+    activate EventBus
+    EventBus --> FireWorker: TaskStartLifecycleEvent
+    deactivate EventBus
+    
+    FireWorker -> TaskStartHandler: handle(workflowRunnable, event)
+    activate TaskStartHandler
+    
+    TaskStartHandler -> TaskRunnable: isTaskInstanceInitialized()?
+    activate TaskRunnable
+    TaskRunnable --> TaskStartHandler: false (未初始化)
+    deactivate TaskRunnable
+    
+    TaskStartHandler -> TaskRunnable: initializeFirstRunTaskInstance()
+    activate TaskRunnable
+    TaskRunnable -> TaskRunnable: FirstRunTaskInstanceFactory.builder()
+    TaskRunnable -> TaskDB: insert(taskInstance)
+    activate TaskDB
+    TaskDB --> TaskRunnable: 返回 taskInstanceId
+    deactivate TaskDB
+    TaskRunnable -> TaskRunnable: initializeTaskExecutionContext()
+    TaskRunnable --> TaskStartHandler: 初始化完成
+    deactivate TaskRunnable
+    
+    TaskStartHandler -> TaskStartHandler: 根据任务状态选择 StateAction
+    TaskStartHandler -> TaskSubmitted: startEventAction(workflowRunnable, taskRunnable, event)
+    activate TaskSubmitted
+    
+    TaskSubmitted -> TaskSubmitted: throwExceptionIfStateIsNotMatch()
+    TaskSubmitted -> TaskSubmitted: tryToDispatchTask(taskRunnable)
+    TaskSubmitted -> EventBus: publish(TaskDispatchLifecycleEvent)
+    activate EventBus
+    EventBus -> EventBus: delayEventQueue.add(event)
+    EventBus --> TaskSubmitted: 事件已发布
+    deactivate EventBus
+    
+    TaskSubmitted --> TaskStartHandler: 处理完成
+    deactivate TaskSubmitted
+    TaskStartHandler --> FireWorker: 处理完成
+    deactivate TaskStartHandler
+end
+
+== 任务分发阶段 ==
+
+loop 事件总线继续轮询
+    FireWorker -> EventBus: poll()
+    activate EventBus
+    EventBus --> FireWorker: TaskDispatchLifecycleEvent
+    deactivate EventBus
+    
+    FireWorker -> TaskSubmitted: dispatchEventAction(workflowRunnable, taskRunnable, event)
+    activate TaskSubmitted
+    
+    TaskSubmitted -> TaskSubmitted: 计算延迟时间
+    TaskSubmitted -> TaskDB: updateById(taskInstance)\n设置状态为 SUBMITTED_SUCCESS
+    activate TaskDB
+    TaskDB --> TaskSubmitted: 更新成功
+    deactivate TaskDB
+    
+    TaskSubmitted -> DispatchQueue: dispatchTaskExecuteRunnableWithDelay(taskRunnable, delayTime)
+    activate DispatchQueue
+    DispatchQueue -> DispatchQueue: 任务入队（优先级队列）
+    DispatchQueue --> TaskSubmitted: 入队成功
+    deactivate DispatchQueue
+    
+    TaskSubmitted --> FireWorker: 处理完成
+    deactivate TaskSubmitted
+end
+
+== 任务调度到Worker ==
+
+loop DispatchLooper 持续运行
+    activate DispatchLooper
+    DispatchLooper -> DispatchQueue: takeTaskExecuteRunnable()
+    activate DispatchQueue
+    DispatchQueue --> DispatchLooper: TaskExecutionRunnable
+    deactivate DispatchQueue
+    
+    DispatchLooper -> DispatchLooper: 检查任务状态
+    alt 状态为 SUBMITTED_SUCCESS 或 DELAY_EXECUTION
+        DispatchLooper -> TaskClient: dispatch(taskRunnable)
+        activate TaskClient
+        
+        TaskClient -> PhysicalDelegator: dispatch(taskRunnable)
+        activate PhysicalDelegator
+        
+        PhysicalDelegator -> PhysicalDelegator: 获取 TaskExecutionContext
+        PhysicalDelegator -> LoadBalancer: select(workerGroup)
+        activate LoadBalancer
+        LoadBalancer --> PhysicalDelegator: Worker Host
+        deactivate LoadBalancer
+        
+        PhysicalDelegator -> PhysicalDelegator: taskExecutionContext.setHost(workerHost)
+        PhysicalDelegator -> TaskDB: updateById(taskInstance)\n设置 host = workerHost
+        activate TaskDB
+        TaskDB --> PhysicalDelegator: 更新成功
+        deactivate TaskDB
+        
+        PhysicalDelegator -> Worker: dispatchTask(TaskExecutorDispatchRequest)
+        activate Worker
+        note right of Worker: RPC 调用\nIPhysicalTaskExecutorOperator.dispatchTask()
+        
+        Worker -> Worker: 接收任务
+        Worker -> Worker: 创建 TaskExecuteThread
+        Worker -> Worker: 执行任务
+        
+        Worker --> PhysicalDelegator: TaskExecutorDispatchResponse(success)
+        deactivate Worker
+        
+        PhysicalDelegator -> TaskDB: updateById(taskInstance)\n设置状态为 DISPATCH
+        activate TaskDB
+        TaskDB --> PhysicalDelegator: 更新成功
+        deactivate TaskDB
+        
+        PhysicalDelegator --> TaskClient: 分发成功
+        deactivate PhysicalDelegator
+        TaskClient --> DispatchLooper: 分发成功
+        deactivate TaskClient
+    else 状态不匹配
+        DispatchLooper -> DispatchLooper: 跳过，不分发
+    end
+    
+    alt 分发失败
+        DispatchLooper -> DispatchQueue: dispatchTaskExecuteRunnableWithDelay(taskRunnable, retryDelay)
+        activate DispatchQueue
+        DispatchQueue --> DispatchLooper: 重新入队
+        deactivate DispatchQueue
+    end
+    deactivate DispatchLooper
+end
+
+== Worker执行任务 ==
+
+Worker -> Worker: 执行任务逻辑
+Worker -> Worker: 更新任务状态为 RUNNING
+Worker -> Master: 发送 TaskRunningLifecycleEvent
+activate Master
+note right of Master: Worker通过RPC回调Master\n通知任务开始运行
+deactivate Master
+
+@enduml

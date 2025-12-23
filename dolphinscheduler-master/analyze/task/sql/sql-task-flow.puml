@@ -1,0 +1,113 @@
+@startuml SQL任务执行完整流程
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam activity {
+    BackgroundColor #E1F5FE
+    BorderColor #01579B
+    FontColor #000000
+}
+
+title SQL 任务从创建到执行完整流程
+
+|用户/UI|
+start
+:创建 SQL 任务定义;
+:配置任务参数\n(数据源、SQL语句等);
+:保存任务定义到数据库;
+
+|API Service|
+:接收创建请求;
+:构建 SqlParameters;
+:保存到 t_ds_task_definition;
+
+|Workflow Engine|
+:创建工作流实例;
+:保存到 t_ds_process_instance;
+
+|Master|
+:创建工作流执行 Runnable;
+:提交到工作流线程池;
+
+partition "工作流执行" {
+    :检查任务依赖;
+    :创建任务实例;
+    :保存到 t_ds_task_instance;
+    :状态: SUBMITTED_SUCCESS;
+    :提交到全局任务调度队列;
+}
+
+partition "任务调度" {
+    :从等待队列获取任务;
+    :选择 Worker\n(负载均衡);
+    :更新任务状态\nRUNNING_EXEUTION;
+    :设置 Worker 地址;
+}
+
+|Master RPC Client|
+:调用 Worker RPC;
+note right: Clients.withService(ITaskInstanceOperator.class)\n.withHost(workerAddress)\n.dispatchTask(request)
+
+|Worker RPC Server|
+:接收任务分发请求;
+:检查 Worker 状态;
+:创建 WorkerTaskExecutor;
+:提交到 Worker 线程池;
+:返回分发成功响应;
+
+|Worker|
+:发送任务已分发事件\n(DISPATCHED);
+note right: 通知 Master 任务已接收
+
+partition "任务执行" {
+    :初始化任务;
+    :创建 SqlTask 对象;
+    :解析任务参数;
+    :验证参数;
+    
+    partition "SQL 执行" {
+        :构建数据源连接参数;
+        :获取数据库连接;
+        :解析 SQL 语句\n(分割、去注释);
+        :处理参数替换\n(${var}, $[time], !{var});
+        
+        :执行前置 SQL;
+        
+        if (SQL 类型?) then (查询)
+            :执行查询 SQL;
+            :处理结果集\n(转换为 JSON);
+            :限制显示行数;
+        else (非查询)
+            :执行更新 SQL;
+            :获取影响行数;
+        endif
+        
+        :处理输出参数;
+        :执行后置 SQL;
+        :关闭数据库连接;
+    }
+    
+    :发送任务运行中事件\n(RUNNING);
+    :设置执行状态\nSUCCESS;
+    :发送任务成功事件\n(SUCCESS);
+}
+
+|Master|
+:接收任务成功事件;
+:发布生命周期事件;
+:更新任务实例状态;
+:发送 ACK 确认;
+
+|Workflow Engine|
+if (有后续任务?) then (是)
+    :检查依赖条件;
+    :创建后续任务实例;
+    :重复调度流程;
+else (否)
+    :工作流执行完成;
+    :更新工作流实例状态;
+endif
+
+stop
+
+@enduml
+

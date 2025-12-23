@@ -1,0 +1,89 @@
+@startuml Master执行流程架构图
+
+!define RECTANGLE class
+
+package "Master Server 启动阶段" {
+    [MasterServer] as MasterServer
+    [WorkflowEventBusFireWorkers] as EventBusWorkers
+    [WorkflowEventBusFireWorker] as EventBusWorker
+    [CommandEngine] as CommandEngine
+    [ICommandFetcher] as CommandFetcher
+    
+    MasterServer --> EventBusWorkers : 启动
+    EventBusWorkers --> EventBusWorker : 创建多个Worker
+    MasterServer --> CommandEngine : 启动
+    CommandEngine --> CommandFetcher : 扫描Command表
+}
+
+package "事件总线机制" {
+    [WorkflowEventBus] as EventBus
+    [DelayQueue] as DelayQueue
+    [ILifecycleEventHandler] as EventHandler
+    [WorkflowStartLifecycleEventHandler] as StartHandler
+    [TaskStartLifecycleEventHandler] as TaskStartHandler
+    
+    EventBus --> DelayQueue : 存储事件
+    EventBusWorker --> EventBus : 轮询事件
+    EventBusWorker --> EventHandler : 分发事件
+    EventHandler <|-- StartHandler
+    EventHandler <|-- TaskStartHandler
+}
+
+package "工作流执行" {
+    [WorkflowExecutionRunnableFactory] as RunnableFactory
+    [RunWorkflowCommandHandler] as CommandHandler
+    [WorkflowExecutionRunnable] as WorkflowRunnable
+    [WorkflowExecutionGraph] as WorkflowGraph
+    [TaskExecutionRunnable] as TaskRunnable
+    
+    CommandEngine --> RunnableFactory : 创建WorkflowRunnable
+    RunnableFactory --> CommandHandler : 处理Command
+    CommandHandler --> WorkflowRunnable : 创建工作流实例
+    WorkflowRunnable --> WorkflowGraph : 构建执行图
+    WorkflowGraph --> TaskRunnable : 创建任务节点
+}
+
+package "状态机机制" {
+    [WorkflowStateActionFactory] as WorkflowStateFactory
+    [WorkflowRunningStateAction] as RunningAction
+    [AbstractWorkflowStateAction] as AbstractWorkflowAction
+    [TaskSubmittedStateAction] as TaskSubmittedAction
+    
+    WorkflowStateFactory --> RunningAction : 根据状态选择
+    RunningAction --> AbstractWorkflowAction : 触发任务
+    AbstractWorkflowAction --> TaskSubmittedAction : 任务状态处理
+}
+
+package "任务分发" {
+    [GlobalTaskDispatchWaitingQueue] as DispatchQueue
+    [GlobalTaskDispatchWaitingQueueLooper] as DispatchLooper
+    [TaskExecutorClient] as TaskClient
+    [PhysicalTaskExecutorClientDelegator] as PhysicalDelegator
+    [IWorkerLoadBalancer] as LoadBalancer
+    
+    TaskSubmittedAction --> DispatchQueue : 任务入队
+    DispatchLooper --> DispatchQueue : 轮询队列
+    DispatchLooper --> TaskClient : 分发任务
+    TaskClient --> PhysicalDelegator : 选择Worker
+    PhysicalDelegator --> LoadBalancer : 负载均衡
+}
+
+package "数据库" {
+    database "t_ds_command" as CommandTable
+    database "t_ds_process_instance" as WorkflowTable
+    database "t_ds_task_instance" as TaskTable
+    
+    CommandFetcher --> CommandTable : 查询Command
+    CommandHandler --> WorkflowTable : 插入/更新工作流实例
+    TaskRunnable --> TaskTable : 插入/更新任务实例
+}
+
+package "Worker Server" {
+    [Worker Server] as WorkerServer
+    [IPhysicalTaskExecutorOperator] as WorkerOperator
+    
+    PhysicalDelegator --> WorkerOperator : RPC调用
+    WorkerOperator --> WorkerServer : 执行任务
+}
+
+@enduml

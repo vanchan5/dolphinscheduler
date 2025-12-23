@@ -1,0 +1,209 @@
+@startuml 工作流状态机完整时序图（优化版）
+
+!theme plain
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 50
+skinparam ParticipantPadding 10
+
+' 合并相关参与者，减少数量
+participant "CommandEngine" as Engine
+participant "WorkflowEventBus\n+ DelayQueue" as EventBus
+participant "WorkflowEventBusFireWorker" as FireWorker
+participant "EventHandler\n+ StateFactory" as Handler
+participant "WorkflowRunningStateAction" as RunningAction
+participant "WorkflowExecutionGraph" as Graph
+participant "TaskStateAction" as TaskAction
+participant "GlobalTaskDispatchQueue\n+ Looper" as DispatchQueue
+participant "TaskExecutorClient" as TaskClient
+participant "Worker Server" as Worker
+participant "Database" as DB
+
+== 阶段1: 工作流启动 ==
+
+Engine -> EventBus: publish(WorkflowStartLifecycleEvent)
+EventBus -> EventBus: 事件入队
+Engine --> Engine: 立即返回（异步）
+
+note right of Engine: CommandEngine 扫描 Command\n创建工作流实例
+
+== 阶段2: 事件轮询和处理 ==
+
+loop 每100ms轮询
+    FireWorker -> EventBus: poll()
+    EventBus --> FireWorker: WorkflowStartLifecycleEvent
+    
+    FireWorker -> Handler: handle(workflowRunnable, event)
+    note right of Handler: WorkflowStartLifecycleEventHandler\n根据状态选择 StateAction
+    
+    Handler -> RunningAction: startEventAction(...)
+    
+    RunningAction -> Graph: getStartNodes()
+    Graph --> RunningAction: 起始任务列表
+    
+    RunningAction -> Graph: isTriggerConditionMet()
+    Graph --> RunningAction: true
+    
+    RunningAction -> EventBus: publish(TaskStartLifecycleEvent)
+    EventBus -> EventBus: 事件入队
+    
+    RunningAction --> Handler: 处理完成
+    Handler --> FireWorker: 处理完成
+end
+
+== 阶段3: 任务启动和分发 ==
+
+loop 事件轮询
+    FireWorker -> EventBus: poll()
+    EventBus --> FireWorker: TaskStartLifecycleEvent
+    
+    FireWorker -> Handler: handle(workflowRunnable, event)
+    note right of Handler: TaskStartLifecycleEventHandler\n初始化 TaskInstance
+    
+    Handler -> DB: insert(taskInstance)
+    DB --> Handler: 返回 taskInstanceId
+    
+    Handler -> TaskAction: startEventAction(...)
+    note right of TaskAction: TaskSubmittedStateAction
+    
+    TaskAction -> EventBus: publish(TaskDispatchLifecycleEvent)
+    EventBus -> EventBus: 事件入队
+    
+    TaskAction --> Handler: 处理完成
+    Handler --> FireWorker: 处理完成
+end
+
+loop 事件轮询
+    FireWorker -> EventBus: poll()
+    EventBus --> FireWorker: TaskDispatchLifecycleEvent
+    
+    FireWorker -> TaskAction: dispatchEventAction(...)
+    
+    TaskAction -> DB: updateById(taskInstance)\n状态: SUBMITTED_SUCCESS
+    DB --> TaskAction: 更新成功
+    
+    TaskAction -> DispatchQueue: dispatchTaskExecuteRunnableWithDelay(...)
+    DispatchQueue -> DispatchQueue: 任务入队
+    
+    TaskAction --> FireWorker: 处理完成
+end
+
+== 阶段4: 任务调度到Worker ==
+
+loop DispatchLooper 持续运行
+    DispatchQueue -> DispatchQueue: takeTaskExecuteRunnable()
+    
+    alt 状态为 SUBMITTED_SUCCESS
+        DispatchQueue -> TaskClient: dispatch(taskRunnable)
+        
+        TaskClient -> TaskClient: 负载均衡选择 Worker
+        
+        TaskClient -> DB: updateById(taskInstance)\nhost = workerHost, 状态: DISPATCH
+        DB --> TaskClient: 更新成功
+        
+        TaskClient -> Worker: dispatchTask(RPC调用)
+        note right of Worker: IPhysicalTaskExecutorOperator\n.dispatchTask()
+        
+        Worker -> Worker: 创建线程执行任务
+        
+        Worker --> TaskClient: TaskExecutorDispatchResponse(success)
+        TaskClient --> DispatchQueue: 分发成功
+    end
+end
+
+== 阶段5: Worker执行和回调 ==
+
+Worker -> Worker: 执行任务逻辑
+Worker -> Worker: 任务执行完成
+
+Worker -> EventBus: RPC回调\nonTaskExecutorSuccess()
+note right of Worker: TaskExecutorEventListenerImpl\n发布 TaskSuccessLifecycleEvent
+
+EventBus -> EventBus: 事件入队
+
+== 阶段6: 任务成功处理 ==
+
+FireWorker -> EventBus: poll()
+EventBus --> FireWorker: TaskSuccessLifecycleEvent
+
+FireWorker -> Handler: handle(workflowRunnable, event)
+note right of Handler: TaskSuccessLifecycleEventHandler\n选择 TaskSuccessStateAction
+
+Handler -> TaskAction: succeedEventAction(...)
+note right of TaskAction: TaskSuccessStateAction
+
+TaskAction -> DB: updateById(taskInstance)\n状态: SUCCESS, endTime, varPool
+DB --> TaskAction: 更新成功
+
+TaskAction -> TaskAction: mergeTaskVarPoolToWorkflow()
+TaskAction -> EventBus: publish(WorkflowTopologyLogicalTransitionEvent)
+EventBus -> EventBus: 事件入队
+
+TaskAction --> Handler: 处理完成
+Handler --> FireWorker: 处理完成
+
+== 阶段7: 触发后续任务 ==
+
+FireWorker -> EventBus: poll()
+EventBus --> FireWorker: WorkflowTopologyLogicalTransitionEvent
+
+FireWorker -> Handler: handle(workflowRunnable, event)
+note right of Handler: WorkflowTopologyLogicalTransitionHandler\n选择 WorkflowRunningStateAction
+
+Handler -> RunningAction: topologyLogicalTransitionEventAction(...)
+
+RunningAction -> Graph: getSuccessors(taskRunnable)
+Graph --> RunningAction: 后续任务列表
+
+RunningAction -> Graph: isTriggerConditionMet(successors)
+Graph --> RunningAction: true (前置任务已完成)
+
+RunningAction -> EventBus: publish(TaskStartLifecycleEvent)
+EventBus -> EventBus: 事件入队
+
+note right of RunningAction: 回到阶段3，触发后续任务\n循环执行直到所有任务完成
+
+RunningAction --> Handler: 处理完成
+Handler --> FireWorker: 处理完成
+
+== 阶段8: 工作流完成 ==
+
+note over RunningAction: 当所有任务都完成时
+
+RunningAction -> Graph: isAllTaskExecutionRunnableChainFinish()?
+Graph --> RunningAction: true
+
+RunningAction -> Graph: isAllTaskExecutionRunnableChainSuccess()?
+Graph --> RunningAction: true
+
+RunningAction -> EventBus: publish(WorkflowSucceedLifecycleEvent)
+EventBus -> EventBus: 事件入队
+
+FireWorker -> EventBus: poll()
+EventBus --> FireWorker: WorkflowSucceedLifecycleEvent
+
+FireWorker -> Handler: handle(workflowRunnable, event)
+Handler -> RunningAction: succeedEventAction(...)
+
+RunningAction -> DB: updateById(workflowInstance)\n状态: SUCCESS, endTime
+DB --> RunningAction: 更新成功
+
+RunningAction -> EventBus: publish(WorkflowFinalizeLifecycleEvent)
+EventBus -> EventBus: 事件入队
+
+RunningAction --> Handler: 工作流完成
+Handler --> FireWorker: 处理完成
+
+== 总结 ==
+
+note over Engine, DB
+  **关键流程：**
+  
+  1. 事件驱动：所有状态转换通过事件触发
+  2. 异步处理：事件发布后立即返回，后台处理
+  3. 定时轮询：每100ms轮询一次事件队列
+  4. 状态机：根据当前状态选择对应的 StateAction
+  5. 链式触发：任务完成自动触发后续任务
+  6. 循环执行：阶段3-7循环，直到所有任务完成
+end note
+
+@enduml

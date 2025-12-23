@@ -1,0 +1,48 @@
+@startuml Worker执行和任务完成（第三部分）
+
+!theme plain
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 50
+
+participant "DispatchQueue" as Queue
+participant "TaskClient" as Client
+participant "Worker" as WorkerNode
+participant "DB" as DB
+participant "EventBus" as EventBus
+participant "FireWorker" as Worker2
+participant "TaskSuccessHandler" as Handler
+participant "TaskSuccessAction" as Action
+
+== 任务调度到Worker ==
+
+Queue -> Queue: takeTaskExecuteRunnable()
+
+Queue -> Client: dispatch(taskRunnable)
+Client -> Client: 负载均衡选择 Worker
+Client -> DB: updateById(状态: DISPATCH, host)
+Client -> WorkerNode: RPC调用 dispatchTask()
+WorkerNode -> WorkerNode: 执行任务
+
+== Worker回调 ==
+
+WorkerNode -> EventBus: RPC回调\nonTaskExecutorSuccess()
+note right of WorkerNode: TaskExecutorEventListenerImpl\n发布 TaskSuccessLifecycleEvent
+EventBus -> EventBus: delayEventQueue.add(event)
+
+== 任务成功处理 ==
+
+Worker2 -> EventBus: poll()
+EventBus --> Worker2: TaskSuccessLifecycleEvent
+
+Worker2 -> Handler: handle(workflowRunnable, event)
+Handler -> Handler: 选择 TaskSuccessStateAction
+Handler -> Action: succeedEventAction(...)
+
+Action -> DB: updateById(状态: SUCCESS, endTime, varPool)
+Action -> Action: mergeTaskVarPoolToWorkflow()
+Action -> EventBus: publish(WorkflowTopologyLogicalTransitionEvent)
+
+Action --> Handler: 处理完成
+Handler --> Worker2: 处理完成
+
+@enduml

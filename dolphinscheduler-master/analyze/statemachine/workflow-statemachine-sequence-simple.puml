@@ -1,0 +1,99 @@
+@startuml 工作流状态机时序图（简化版）
+
+!theme plain
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 40
+skinparam ParticipantPadding 5
+
+' 大幅减少参与者数量
+participant "CommandEngine" as Engine
+participant "EventBus" as EventBus
+participant "FireWorker" as Worker
+participant "Handler\n+ StateAction" as Handler
+participant "Graph" as Graph
+participant "DispatchQueue" as Queue
+participant "TaskClient" as Client
+participant "Worker" as WorkerNode
+participant "DB" as DB
+
+== 1. 工作流启动 ==
+
+Engine -> EventBus: publish(WorkflowStartLifecycleEvent)
+EventBus -> EventBus: 入队
+Engine --> Engine: 返回
+
+== 2. 事件处理 ==
+
+Worker -> EventBus: poll() (每100ms)
+EventBus --> Worker: WorkflowStartLifecycleEvent
+
+Worker -> Handler: handle()
+Handler -> Handler: 选择 WorkflowRunningStateAction
+Handler -> Graph: getStartNodes()
+Graph --> Handler: 起始任务
+Handler -> EventBus: publish(TaskStartLifecycleEvent)
+
+== 3. 任务启动 ==
+
+Worker -> EventBus: poll()
+EventBus --> Worker: TaskStartLifecycleEvent
+
+Worker -> Handler: handle()
+Handler -> DB: insert(taskInstance)
+Handler -> Handler: 选择 TaskSubmittedStateAction
+Handler -> EventBus: publish(TaskDispatchLifecycleEvent)
+
+== 4. 任务分发 ==
+
+Worker -> EventBus: poll()
+EventBus --> Worker: TaskDispatchLifecycleEvent
+
+Worker -> Handler: handle()
+Handler -> DB: updateById(状态: SUBMITTED_SUCCESS)
+Handler -> Queue: dispatchTaskExecuteRunnableWithDelay()
+
+== 5. Worker执行 ==
+
+Queue -> Client: dispatch()
+Client -> DB: updateById(状态: DISPATCH)
+Client -> WorkerNode: RPC调用 dispatchTask()
+WorkerNode -> WorkerNode: 执行任务
+WorkerNode --> Client: 执行完成
+
+== 6. 任务完成 ==
+
+WorkerNode -> EventBus: RPC回调\npublish(TaskSuccessLifecycleEvent)
+
+Worker -> EventBus: poll()
+EventBus --> Worker: TaskSuccessLifecycleEvent
+
+Worker -> Handler: handle()
+Handler -> DB: updateById(状态: SUCCESS)
+Handler -> EventBus: publish(WorkflowTopologyLogicalTransitionEvent)
+
+== 7. 触发后续任务 ==
+
+Worker -> EventBus: poll()
+EventBus --> Worker: WorkflowTopologyLogicalTransitionEvent
+
+Worker -> Handler: handle()
+Handler -> Graph: getSuccessors()
+Graph --> Handler: 后续任务列表
+Handler -> EventBus: publish(TaskStartLifecycleEvent)
+
+note right of Handler: 回到阶段3，循环执行\n直到所有任务完成
+
+== 8. 工作流完成 ==
+
+Handler -> Graph: isAllTaskFinish()?
+Graph --> Handler: true
+Handler -> EventBus: publish(WorkflowSucceedLifecycleEvent)
+
+Worker -> EventBus: poll()
+EventBus --> Worker: WorkflowSucceedLifecycleEvent
+
+Worker -> Handler: handle()
+Handler -> DB: updateById(状态: SUCCESS)
+Handler -> EventBus: publish(WorkflowFinalizeLifecycleEvent)
+
+@enduml

@@ -1,0 +1,107 @@
+@startuml 状态变更机制流程图
+
+!theme plain
+skinparam activity {
+    BackgroundColor lightblue
+    BorderColor black
+    FontSize 12
+}
+
+title 状态变更机制流程图
+
+start
+
+:事件被发布到事件总线;
+note right
+  **事件来源：**
+  - 内部事件：任务完成、工作流启动等
+  - 外部事件：Worker 回调、用户操作等
+end note
+
+:事件总线轮询事件\n(每100ms);
+
+:根据事件类型获取 EventHandler;
+
+:EventHandler.handle()\n处理事件;
+
+:根据当前状态选择 StateAction;
+note right
+  **工作流：**
+  WorkflowStateActionFactory.getAction(currentState)
+  
+  **任务：**
+  TaskStateActionFactory.getTaskStateAction(currentState)
+end note
+
+:StateAction 的对应方法被调用;
+note right
+  **例如：**
+  - WorkflowRunningStateAction.succeedEventAction()
+  - TaskRunningStateAction.succeedEventAction()
+end note
+
+:验证当前状态是否匹配;
+note right
+  throwExceptionIfStateIsNotMatch()
+  确保状态变更的安全性
+end note
+
+if (状态不匹配?) then (是)
+  :抛出 IllegalStateException;
+  stop
+else (否)
+endif
+
+:StateAction 根据业务逻辑\n决定是否变更状态;
+
+if (需要变更状态?) then (是)
+  
+  :更新内存中的状态;
+  note right
+    **工作流：**
+    workflowInstance.setState(targetState)
+    
+    **任务：**
+    taskInstance.setState(targetState)
+  end note
+  
+  :更新数据库中的状态;
+  note right
+    **工作流：**
+    workflowInstanceDao.updateById(workflowInstance)
+    
+    **任务：**
+    taskInstanceDao.updateById(taskInstance)
+  end note
+  
+  if (数据库更新成功?) then (是)
+    :记录状态变更日志;
+    note right
+      log.info("state from {} to {}",
+        originState, targetState)
+    end note
+  else (否)
+    :回滚内存状态;
+    note right
+      workflowInstance.setState(originState)
+      或
+      taskInstance.setState(originState)
+    end note
+    :抛出异常;
+    stop
+  endif
+  
+else (否)
+  :不变更状态，继续其他操作;
+endif
+
+:执行其他业务逻辑;
+note right
+  - 发布其他事件
+  - 触发后续任务
+  - 更新其他属性等
+end note
+
+stop
+
+@enduml

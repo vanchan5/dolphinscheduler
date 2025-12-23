@@ -1,0 +1,127 @@
+@startuml Master执行流程概览图
+
+!theme plain
+skinparam componentStyle rectangle
+skinparam linetype ortho
+
+package "1. 触发阶段" {
+    [API/调度器] as Trigger
+    [AbstractWorkflowTrigger] as WorkflowTrigger
+    database "t_ds_command" as CommandDB
+    database "t_ds_process_instance" as WorkflowDB
+    
+    Trigger --> WorkflowTrigger : 触发工作流
+    WorkflowTrigger --> WorkflowDB : 插入 WorkflowInstance
+    WorkflowTrigger --> CommandDB : 插入 Command
+}
+
+package "2. Command处理阶段" {
+    [CommandEngine] as Engine
+    [ICommandFetcher] as Fetcher
+    [WorkflowExecutionRunnableFactory] as Factory
+    [RunWorkflowCommandHandler] as Handler
+    
+    Engine --> Fetcher : 扫描 Command
+    Fetcher --> CommandDB : 查询 Command
+    Engine --> Factory : 创建 WorkflowExecutionRunnable
+    Factory --> Handler : 处理 Command
+    Handler --> WorkflowDB : 更新状态为 RUNNING_EXECUTION
+}
+
+package "3. 事件总线机制" {
+    [WorkflowEventBus] as EventBus
+    [WorkflowEventBusFireWorker] as FireWorker
+    [ILifecycleEventHandler] as HandlerRegistry
+    
+    Engine --> EventBus : 发布 WorkflowStartLifecycleEvent
+    FireWorker --> EventBus : 轮询事件 (每100ms)
+    FireWorker --> HandlerRegistry : 根据事件类型分发
+}
+
+package "4. 工作流状态机" {
+    [WorkflowStateActionFactory] as StateFactory
+    [WorkflowRunningStateAction] as RunningAction
+    [AbstractWorkflowStateAction] as AbstractAction
+    [WorkflowExecutionGraph] as Graph
+    
+    HandlerRegistry --> StateFactory : 获取 StateAction
+    StateFactory --> RunningAction : 根据状态选择
+    RunningAction --> AbstractAction : triggerTasks()
+    AbstractAction --> Graph : 获取可执行任务
+}
+
+package "5. 任务处理" {
+    [TaskExecutionRunnable] as TaskRunnable
+    [TaskStartLifecycleEventHandler] as TaskStartHandler
+    [TaskSubmittedStateAction] as TaskSubmitted
+    database "t_ds_task_instance" as TaskDB
+    
+    AbstractAction --> TaskRunnable : 创建任务节点
+    AbstractAction --> TaskStartHandler : 发布 TaskStartLifecycleEvent
+    TaskStartHandler --> TaskRunnable : 初始化 TaskInstance
+    TaskRunnable --> TaskDB : 插入 TaskInstance
+    TaskStartHandler --> TaskSubmitted : 处理任务启动
+    TaskSubmitted --> TaskDB : 更新状态为 SUBMITTED_SUCCESS
+}
+
+package "6. 任务分发" {
+    [GlobalTaskDispatchWaitingQueue] as DispatchQueue
+    [GlobalTaskDispatchWaitingQueueLooper] as DispatchLooper
+    [TaskExecutorClient] as TaskClient
+    [PhysicalTaskExecutorClientDelegator] as PhysicalDelegator
+    [IWorkerLoadBalancer] as LoadBalancer
+    
+    TaskSubmitted --> DispatchQueue : 任务入队
+    DispatchLooper --> DispatchQueue : 轮询队列
+    DispatchLooper --> TaskClient : 分发任务
+    TaskClient --> PhysicalDelegator : 选择 Worker
+    PhysicalDelegator --> LoadBalancer : 负载均衡
+    PhysicalDelegator --> TaskDB : 更新 host 和状态
+}
+
+package "7. Worker执行" {
+    [Worker Server] as Worker
+    [IPhysicalTaskExecutorOperator] as WorkerOperator
+    
+    PhysicalDelegator --> WorkerOperator : RPC调用 dispatchTask()
+    WorkerOperator --> Worker : 执行任务
+    Worker --> TaskDB : 更新任务状态
+}
+
+' 连接关系
+CommandDB ..> Engine : 被扫描
+WorkflowDB ..> Handler : 被更新
+TaskDB ..> TaskRunnable : 被插入/更新
+TaskDB ..> PhysicalDelegator : 被更新
+TaskDB ..> Worker : 被更新
+
+note right of Engine
+  **CommandEngine**
+  - 后台守护线程
+  - 每1秒扫描一次Command表
+  - 创建WorkflowExecutionRunnable
+  - 发布WorkflowStartLifecycleEvent
+end note
+
+note right of FireWorker
+  **WorkflowEventBusFireWorker**
+  - 定时轮询事件总线
+  - 每100ms执行一次
+  - 根据事件类型分发到对应Handler
+end note
+
+note right of DispatchLooper
+  **GlobalTaskDispatchWaitingQueueLooper**
+  - 持续运行的后台线程
+  - 从队列中取出任务
+  - 调用TaskExecutorClient分发
+end note
+
+note right of PhysicalDelegator
+  **PhysicalTaskExecutorClientDelegator**
+  - 通过负载均衡选择Worker
+  - RPC调用Worker接口
+  - 更新任务实例的host
+end note
+
+@enduml

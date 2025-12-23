@@ -127,7 +127,7 @@ public class NetUtils {
         List<NetworkInterface> suitableNetworkInterface = findSuitableNetworkInterface();
         List<InetAddress> suitableInetAddress = findSuitableInetAddress(suitableNetworkInterface)
                 // 本地可能存在多个IP,如果是点对点接口IP，通常用于 VPN/隧道,虽然能 ping 通，但 Netty 连接会超时
-                // .stream().filter(a-> a.getHostAddress().contains("192")).collect(Collectors.toList())
+                .stream().filter(a-> (a.getHostAddress().contains("192") || a.getHostAddress().contains("172"))).collect(Collectors.toList())
                 ;
         if (CollectionUtils.isEmpty(suitableInetAddress)) {
             return null;

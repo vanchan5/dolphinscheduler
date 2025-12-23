@@ -1,0 +1,40 @@
+@startuml 工作流启动和任务触发（第一部分）
+
+!theme plain
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 50
+
+participant "CommandEngine" as Engine
+participant "EventBus" as EventBus
+participant "FireWorker" as Worker
+participant "StartHandler" as Handler
+participant "RunningAction" as Action
+participant "Graph" as Graph
+
+== 工作流启动 ==
+
+Engine -> EventBus: publish(WorkflowStartLifecycleEvent)
+EventBus -> EventBus: delayEventQueue.add(event)
+
+... 100ms后 ...
+
+Worker -> EventBus: poll()
+EventBus --> Worker: WorkflowStartLifecycleEvent
+
+Worker -> Handler: handle(workflowRunnable, event)
+Handler -> Handler: 根据状态选择 WorkflowRunningStateAction
+Handler -> Action: startEventAction(...)
+
+Action -> Graph: getStartNodes()
+Graph --> Action: List<TaskExecutionRunnable>
+
+Action -> Graph: isTriggerConditionMet(task)
+Graph --> Action: true
+
+Action -> EventBus: publish(TaskStartLifecycleEvent)
+EventBus -> EventBus: delayEventQueue.add(event)
+
+Action --> Handler: 处理完成
+Handler --> Worker: 处理完成
+
+@enduml

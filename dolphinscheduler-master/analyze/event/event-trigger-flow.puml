@@ -1,0 +1,233 @@
+@startuml 事件触发机制流程图
+
+!theme plain
+skinparam activity {
+    BackgroundColor lightblue
+    BorderColor black
+    FontSize 12
+}
+
+title 事件触发机制完整流程图
+
+start
+
+:系统启动;
+
+:WorkflowEventBusFireWorkers.start();
+note right
+  **启动阶段：**
+  1. 创建多个 WorkflowEventBusFireWorker
+  2. 注册所有 ILifecycleEventHandler
+  3. 启动定时轮询任务（每100ms）
+end note
+
+partition "事件发布阶段" {
+    :某个组件需要触发事件;
+    
+    if (事件来源?) then (内部事件)
+        :Master 内部组件发布;
+        note right
+          **内部事件来源：**
+          - CommandEngine: 工作流启动
+          - StateAction: 任务触发、状态转换
+          - TaskExecutionRunnable: 任务重试、故障转移
+        end note
+    else (外部事件)
+        :Worker 通过 RPC 回调;
+        note right
+          **外部事件来源：**
+          - Worker 执行任务时
+          - 通过 ITaskExecutorEventListener 接口
+          - TaskExecutorEventListenerImpl 处理回调
+        end note
+    endif
+    
+    :调用 workflowEventBus.publish(event);
+    
+    :事件放入 DelayQueue;
+    note right
+      **DelayQueue 特点：**
+      - 线程安全
+      - 支持延迟事件
+      - FIFO 顺序
+    end note
+    
+    :publish() 方法立即返回;
+    note right
+      **异步非阻塞：**
+      - 不等待事件处理
+      - 立即返回
+      - 事件在后台处理
+    end note
+}
+
+partition "事件轮询阶段" {
+    :ScheduledExecutorService 定时触发;
+    note right
+      **轮询机制：**
+      - 每100ms执行一次
+      - scheduleWithFixedDelay()
+      - 后台线程执行
+    end note
+    
+    :WorkflowEventBusFireWorker.fireAllRegisteredEvent();
+    
+    :获取所有有事件的工作流;
+    note right
+      **过滤条件：**
+      - 遍历所有注册的工作流
+      - 检查 eventBus.isEmpty()
+      - 返回有事件的工作流列表
+    end note
+    
+    if (有事件?) then (是)
+        :遍历每个工作流;
+        
+        :doFireSingleWorkflowEventBus(workflow);
+        
+        :检查 eventBus.isEmpty();
+        
+        while (队列不为空?) is (是)
+            :从队列取出事件;
+            note right
+              **poll() 方法：**
+              - delayEventQueue.poll()
+              - 如果事件有延迟，会等到延迟时间到期
+              - 返回 Optional<AbstractLifecycleEvent>
+            end note
+            
+            if (取出事件成功?) then (是)
+                :增加成功计数;
+                note right
+                  workflowEventBusSummary
+                  .increaseFireSuccessEventCount()
+                end note
+                
+                :doFireSingleEvent(workflow, event);
+                
+            else (否)
+                :退出循环;
+            endif
+        endwhile (否)
+        
+    else (否)
+        :直接返回;
+    endif
+}
+
+partition "事件分发阶段" {
+    :根据事件类型获取 Handler;
+    note right
+      **事件类型映射：**
+      - event.getEventType()
+      - eventHandlerMap.get(eventType)
+      - 返回 ILifecycleEventHandler
+    end note
+    
+    if (Handler 存在?) then (是)
+        :调用 handler.handle(workflow, event);
+        
+    else (否)
+        :抛出 RuntimeException;
+        note right
+          "No EventHandler found for event: " + eventType
+        end note
+        stop
+    endif
+}
+
+partition "事件处理阶段" {
+    :EventHandler 处理事件;
+    
+    if (事件类型?) then (工作流事件)
+        :AbstractWorkflowLifecycleEventHandler.handle();
+        
+        :根据工作流当前状态选择 StateAction;
+        note right
+          **状态选择：**
+          - workflowStateActionFactory.getAction(state)
+          - 根据状态返回对应的 StateAction
+        end note
+        
+        :调用 StateAction 的对应方法;
+        note right
+          **方法映射：**
+          - START → startEventAction()
+          - SUCCEED → succeedEventAction()
+          - FAILED → failedEventAction()
+          - TOPOLOGY_LOGICAL_TRANSACTION → topologyLogicalTransitionEventAction()
+        end note
+        
+    else (任务事件)
+        :AbstractTaskLifecycleEventHandler.handle();
+        
+        :根据任务当前状态选择 StateAction;
+        note right
+          **状态选择：**
+          - taskStateActionFactory.getTaskStateAction(state)
+          - 根据状态返回对应的 TaskStateAction
+        end note
+        
+        :调用 StateAction 的对应方法;
+        note right
+          **方法映射：**
+          - START → startEventAction()
+          - RUNNING → startedEventAction()
+          - SUCCEEDED → succeedEventAction()
+          - FAILED → failedEventAction()
+        end note
+    endif
+    
+    :StateAction 执行业务逻辑;
+    note right
+      **业务逻辑包括：**
+      - 更新状态
+      - 更新数据库
+      - 触发后续任务
+      - 发布新事件等
+    end note
+    
+    if (需要发布新事件?) then (是)
+        :发布新事件;
+        note right
+          **可能发布的事件：**
+          - 任务完成 → 触发后续任务
+          - 工作流完成 → 最终化事件
+          - 任务失败 → 重试事件
+        end note
+        
+        :回到事件发布阶段;
+    else (否)
+    endif
+}
+
+partition "异常处理阶段" {
+    if (处理成功?) then (是)
+        :继续处理下一个事件;
+    else (否)
+        :捕获异常;
+        
+        if (数据库连接失败?) then (是)
+            :重新发布事件;
+            note right
+              **重试机制：**
+              - eventBus.publish(event)
+              - 事件重新入队
+              - 等待5秒后重试
+            end note
+            
+            :ThreadUtils.sleep(5_000);
+            :return;
+        else (否)
+            :减少成功计数;
+            :增加失败计数;
+            :抛出 WorkflowEventFireException;
+        endif
+    endif
+}
+
+:继续轮询（100ms后);
+
+stop
+
+@enduml

@@ -33,6 +33,7 @@ import org.apache.dolphinscheduler.registry.api.RegistryConfiguration;
 import org.apache.dolphinscheduler.scheduler.api.SchedulerApi;
 import org.apache.dolphinscheduler.server.master.cluster.ClusterManager;
 import org.apache.dolphinscheduler.server.master.cluster.ClusterStateMonitors;
+import org.apache.dolphinscheduler.server.master.config.MasterConfig;
 import org.apache.dolphinscheduler.server.master.engine.MasterCoordinator;
 import org.apache.dolphinscheduler.server.master.engine.WorkflowEngine;
 import org.apache.dolphinscheduler.server.master.engine.system.SystemEventBus;
@@ -100,8 +101,21 @@ public class MasterServer implements IStoppable {
     private MasterCoordinator masterCoordinator;
 
     public static void main(String[] args) {
+        /**
+         * 注册未捕获异常监控指标
+         * 注册一个 Micrometer Gauge 指标 ds.master.uncached.exception
+         * 通过方法引用实时获取未捕获异常计数
+         * 用于监控和告警
+         */
         MasterServerMetrics.registerUncachedException(DefaultUncaughtExceptionHandler::getUncaughtExceptionCount);
 
+        /**
+         * 设置全局未捕获异常处理器
+         * 为所有线程设置默认的未捕获异常处理器
+         * 当线程抛出未捕获异常时，DefaultUncaughtExceptionHandler 会：
+         * 将异常计数加 1（使用 LongAdder）
+         * 记录错误日志（包含线程信息和异常堆栈）
+         */
         Thread.setDefaultUncaughtExceptionHandler(DefaultUncaughtExceptionHandler.getInstance());
         Thread.currentThread().setName(Constants.THREAD_NAME_MASTER_SERVER);
         SpringApplication.run(MasterServer.class);
@@ -116,6 +130,10 @@ public class MasterServer implements IStoppable {
         final long startupTime = System.currentTimeMillis();
 
         // init rpc server
+        /**
+         * 1、扫描注册methodInvoker {@link JdkDynamicServerHandler#registerMethodInvoker(ServerMethodInvoker)}
+         * 2、启动 {@link NettyRemotingServer#start()} 服务端 -> spring自动注入初始化配置信息{@link MasterRpcServer#MasterRpcServer(MasterConfig)}
+         */
         this.masterRPCServer.start();
 
         // install task plugin
