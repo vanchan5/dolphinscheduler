@@ -143,8 +143,8 @@ class NettyRemotingServer {
      * 新的客户端连接调用,服务端创建新的channel与客户端的channel进行通信,同一个TCP连接,互相通信
      *
      * SocketChannel对象 [id: 0x8d360468, L:/172.25.42.14:5678 - R:/172.25.42.14:53543]
-     *           L: 服务端
-     *           R: 客户端
+     *           L: local服务端
+     *           R: remote客户端
      */
     private void initNettyChannel(SocketChannel ch) {
         ch.pipeline()

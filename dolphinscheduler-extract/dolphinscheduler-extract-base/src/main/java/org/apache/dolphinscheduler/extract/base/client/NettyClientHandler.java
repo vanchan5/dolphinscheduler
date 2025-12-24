@@ -56,7 +56,8 @@ public class NettyClientHandler extends ChannelInboundHandlerAdapter {
      * 2、网络中断
      * 3、读取到 EOF
      * 4、写操作失败
-     * 5、心跳超时(服务端检测)org.apache.dolphinscheduler.extract.base.server.JdkDynamicServerHandler#userEventTriggered(io.netty.channel.ChannelHandlerContext, java.lang.Object)
+     * 5、心跳超时(服务端检测) {@link NettyRemotingClient#start()}
+     * org.apache.dolphinscheduler.extract.base.server.JdkDynamicServerHandler#userEventTriggered(io.netty.channel.ChannelHandlerContext, java.lang.Object)
      *
      * 分析 --》 服务端断开连接.md
      * @param ctx
