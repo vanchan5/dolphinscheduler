@@ -33,7 +33,7 @@ public class NioSelectorServer {
         // 创建NIO ServerSocketChannel
         ServerSocketChannel serverSocket = ServerSocketChannel.open();
         serverSocket.socket().bind(new InetSocketAddress(9000));
-        // 设置ServerSocketChannel为非阻塞
+        // 设置ServerSocketChannel为非阻塞,不用等待连接阻塞
         serverSocket.configureBlocking(false);
         // 打开Selector处理Channel，即创建epoll
         Selector selector = Selector.open();
@@ -85,6 +85,20 @@ public class NioSelectorServer {
             // 阻塞等待需要处理的事件发生,底层调用
             // private native int epollWait(long pollAddress, int numfds, long timeout,int epfd) throws IOException;
             // 就绪列表rdlist有值返回,唤醒;无值则继续阻塞进程
+            //      游戏 事件集合rdlist如果有上万个, while (iterator.hasNext())遍历上万次,新的用户连接需要等待
+            //      优化: netty的bossGroup和workerGroup
+            // BUG: 多种因素导致返回0,进行无意义的轮询，从而 使 CPU 使用率急剧上升，系统性能大幅下降。
+            /**
+             * 通常是阻塞的，但是在epoll空轮询的bug中，
+             * 之前处于连接状态突然被断开，select()的
+             * 返回值noOfKeys应该等于0，也就是阻塞状态
+             * 但是，在此bug中，select()被唤醒，而又
+             * 没有数据传入，导致while (itr.hasNext())
+             * 根本不会执行，而后就进入for (;;) {的死循环
+             * 但是，正常状态下应该阻塞，也就是只输出一个waiting...
+             * 而此时进入死循环，不断的输出waiting...，程序死循环
+             * cpu自然很快飙升到100%状态。
+             */
             selector.select();
 
             // 获取selector中注册的全部事件的 SelectionKey 实例
