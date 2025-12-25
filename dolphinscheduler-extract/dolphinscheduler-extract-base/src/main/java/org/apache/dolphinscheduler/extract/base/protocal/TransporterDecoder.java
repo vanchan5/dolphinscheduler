@@ -26,6 +26,29 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ReplayingDecoder;
 
+/**
+ *
+ * 使用 ReplayingDecoder 实现状态机解码
+ * 将网络接收的二进制数据解码为 Transporter 对象。
+ * ByteBuf:
+ * ┌──────┬─────────┬──────────────┬──────────────────┬──────────────┬──────────────────┐
+ * │ MAGIC│ VERSION │ HEADER_LEN   │ HEADER_BYTES      │ BODY_LEN     │ BODY_BYTES       │
+ * │(1字节)│(1字节)  │  (4字节)     │ (变长，JSON)      │  (4字节)     │ (变长，JSON)     │
+ * └──────┴─────────┴──────────────┴──────────────────┴──────────────┴──────────────────┘
+ *          ↑                              ↑                              ↑
+ *          │                              │                              │
+ *    协议标识符                     Header 序列化结果              Body 序列化结果
+ *
+ * MAGIC → VERSION → HEADER_LENGTH → HEADER → BODY_LENGTH → BODY → MAGIC (循环)
+ *
+ * 每个状态读取固定字段
+ * checkpoint() 保存状态，数据不足时自动回退
+ * ReplayingDecoder 自动处理数据不足的情况
+ *
+ * 自动处理数据不足：数据未到齐时自动等待，无需手动检查
+ * 简化代码：无需手动检查 readableBytes()
+ * 状态管理：通过 checkpoint() 管理解码状态
+ */
 @Slf4j
 public class TransporterDecoder extends ReplayingDecoder<TransporterDecoder.State> {
 
@@ -38,6 +61,30 @@ public class TransporterDecoder extends ReplayingDecoder<TransporterDecoder.Stat
     private int bodyLength;
     private byte[] body;
 
+    /**
+     * 枚举值本身没有数值意义,只是标识符,顺序才是关键
+     *
+     * 顺序一致：State 枚举顺序 = 协议字段顺序
+     * 操作匹配：每个 State 的读取操作与编码器的写入操作匹配
+     * 状态机：通过 checkpoint() 控制状态流转
+     *
+     * 完整对应关系图
+     *      编码器写入顺序                   解码器状态顺序
+     *      ─────────────────              ─────────────────
+     *      writeByte(MAGIC)        ←→     State.MAGIC
+     *      writeByte(VERSION)      ←→     State.VERSION
+     *      writeInt(headerLen)     ←→     State.HEADER_LENGTH
+     *      writeBytes(header)      ←→     State.HEADER
+     *      writeInt(bodyLen)       ←→     State.BODY_LENGTH
+     *      writeBytes(body)        ←→     State.BODY
+     *
+     * 这种设计保证了协议解析的正确性和可靠性，即使数据分片到达也能正确处理。
+     *
+     * @param ctx
+     * @param in
+     * @param out
+     * @throws Exception
+     */
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
         switch (state()) {

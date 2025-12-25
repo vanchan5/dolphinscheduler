@@ -1,0 +1,139 @@
+@startuml Netty sync() 执行时序图
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam sequenceMessageAlign center
+
+title Netty ChannelFuture.sync() 阻塞唤醒机制详解
+
+actor "调用线程\n(你的代码)" as Caller
+participant "Bootstrap" as Bootstrap
+participant "DefaultChannelPromise\n(对象 0x12345678)" as Promise #LightBlue
+participant "EventLoop 线程" as EventLoop
+participant "对象监视器\n(ObjectMonitor)" as Monitor #LightGreen
+participant "WaitSet\n(等待队列)" as WaitSet #LightYellow
+
+== 阶段1: 创建连接和 Promise 对象 ==
+
+Caller -> Bootstrap: connect(host, port)
+activate Bootstrap
+
+Bootstrap -> Promise: new DefaultChannelPromise()
+activate Promise
+note right of Promise: 创建对象实例\n地址: 0x12345678\nisDone = false
+
+Bootstrap -> EventLoop: doConnect(promise)
+activate EventLoop
+note right of EventLoop: 异步连接操作开始\n持有 promise 引用\n(同一个对象 0x12345678)
+
+Bootstrap --> Caller: return promise (0x12345678)
+deactivate Bootstrap
+
+== 阶段2: 调用 sync() 开始阻塞 ==
+
+Caller -> Promise: sync()
+activate Promise
+
+Promise -> Promise: await()
+activate Promise
+
+Promise -> Monitor: synchronized(this)
+activate Monitor
+note right of Monitor: 获取对象 0x12345678\n的监视器锁
+
+Promise -> Promise: isDone() == false?
+activate Promise
+Promise --> Promise: false (未完成)
+deactivate Promise
+
+Promise -> WaitSet: wait()
+activate WaitSet
+note right of WaitSet: 1. 将调用线程加入\n   WaitSet 队列\n2. 释放监视器锁\n3. 线程进入 WAITING 状态
+
+WaitSet --> Monitor: 释放锁
+deactivate Monitor
+
+WaitSet --> Caller: **线程阻塞在这里** ⏸️
+deactivate WaitSet
+deactivate Promise
+deactivate Promise
+
+== 阶段3: EventLoop 完成连接 ==
+
+EventLoop -> EventLoop: 执行 TCP 连接操作
+note right of EventLoop: 网络 I/O 操作\n建立 TCP 连接
+
+EventLoop -> EventLoop: 连接成功
+
+== 阶段4: 设置成功并唤醒 ==
+
+EventLoop -> Promise: setSuccess(result)
+activate Promise
+
+Promise -> Monitor: synchronized(this)
+activate Monitor
+note right of Monitor: 获取同一个对象\n0x12345678 的监视器锁
+
+Promise -> Promise: setSuccess0(result)
+activate Promise
+Promise -> Promise: this.result = result
+Promise -> Promise: this.isDone = true
+deactivate Promise
+
+Promise -> Promise: hasWaiters()?
+activate Promise
+Promise --> Promise: true (有等待线程)
+deactivate Promise
+
+Promise -> Monitor: notifyAll()
+activate Monitor
+note right of Monitor: 唤醒对象 0x12345678\n的 WaitSet 中的所有线程
+
+Monitor -> WaitSet: 遍历 WaitSet
+activate WaitSet
+WaitSet -> WaitSet: 将所有等待线程\n从 WaitSet 移到 EntryList
+WaitSet --> Monitor: 线程状态变为 BLOCKED
+deactivate WaitSet
+
+Monitor --> Promise: 唤醒完成
+deactivate Monitor
+
+Promise --> EventLoop: 返回
+deactivate Promise
+deactivate Monitor
+
+== 阶段5: 调用线程被唤醒 ==
+
+WaitSet -> Caller: **线程被唤醒** ▶️
+activate Caller
+
+Caller -> Monitor: 重新竞争锁
+activate Monitor
+Monitor --> Caller: 获取锁成功
+deactivate Monitor
+
+Caller -> Promise: isDone()?
+activate Promise
+Promise --> Caller: true (已完成)
+deactivate Promise
+
+Caller -> Promise: 退出 while 循环
+Caller -> Promise: 释放锁
+deactivate Promise
+
+Promise --> Caller: sync() 返回
+deactivate Caller
+
+== 阶段6: 检查结果 ==
+
+Caller -> Promise: isSuccess()?
+activate Promise
+Promise --> Caller: true
+deactivate Promise
+
+Caller -> Promise: channel()
+activate Promise
+Promise --> Caller: 返回 Channel 对象
+deactivate Promise
+
+@enduml
+

@@ -24,6 +24,18 @@ import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.MessageToByteEncoder;
 
+/**
+ * 编码格式
+ *
+ * ByteBuf:
+ * ┌──────┬─────────┬──────────────┬──────────────────┬──────────────┬──────────────────┐
+ * │ MAGIC│ VERSION │ HEADER_LEN   │ HEADER_BYTES      │ BODY_LEN     │ BODY_BYTES       │
+ * │(1字节)│(1字节)  │  (4字节)     │ (变长，JSON)      │  (4字节)     │ (变长，JSON)     │
+ * └──────┴─────────┴──────────────┴──────────────────┴──────────────┴──────────────────┘
+ *          ↑                              ↑                              ↑
+ *          │                              │                              │
+ *    协议标识符                     Header 序列化结果              Body 序列化结果
+ */
 @Sharable
 public class TransporterEncoder extends MessageToByteEncoder<Transporter> {
 
