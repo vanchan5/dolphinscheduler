@@ -94,7 +94,7 @@ public class MasterRegistryClient implements AutoCloseable {
                     new MasterHeartBeatTask(masterConfig, metricsProvider, registryClient, masterCoordinator);
             // master registry
             registry();
-            // 连接状态监听
+            // 连接状态监听,通过CuratorFramework框架监听连接状态,调用MasterConnectionStateListener操作服务
             registryClient.addConnectionStateListener(new MasterConnectionStateListener(registryClient));
         } catch (Exception e) {
             throw new RegistryException("Master registry client start up error", e);

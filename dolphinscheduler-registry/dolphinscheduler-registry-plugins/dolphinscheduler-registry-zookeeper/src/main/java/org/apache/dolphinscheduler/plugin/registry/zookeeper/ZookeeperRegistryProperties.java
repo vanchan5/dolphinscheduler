@@ -32,6 +32,11 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.validation.Errors;
 import org.springframework.validation.Validator;
 
+/**
+ * Sping Bean,
+ * 初始化作为参数,spring寻找ZookeeperRegistryProperties bean作为参数,创建Registry Bean
+ * {@link ZookeeperRegistryAutoConfiguration#zookeeperRegistry(ZookeeperRegistryProperties)}
+ */
 @Slf4j
 @Data
 @NoArgsConstructor

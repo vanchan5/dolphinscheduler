@@ -57,6 +57,10 @@ public class RegistryClient {
 
     private final Registry registry;
 
+    /**
+     * 创建master、worker、alert、failover-finish-nodes节点
+     * @param registry
+     */
     public RegistryClient(Registry registry) {
         this.registry = registry;
         if (!registry.exists(RegistryNodeType.MASTER.getRegistryPath())) {

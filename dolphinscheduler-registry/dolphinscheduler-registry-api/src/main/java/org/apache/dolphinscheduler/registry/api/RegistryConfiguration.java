@@ -21,9 +21,23 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+
+/**
+ * 配置驱动: registry.type=zookeeper
+ *
+ * {@link RegistryConfiguration#registryClient(Registry)} 根据Registry bean注册registryClient,初始化registryClient
+ *
+ */
 @Configuration
 public class RegistryConfiguration {
 
+    /**
+     * 参数必须是一个bean,registry的Bean的创建,留给其子类来实现,
+     * RegistryConfiguration.registryClient() 方法被调用时，Spring 会自动从容器中查找 Registry 类型的 Bean 并注入
+     * registry对外提供接口,支持多种 Registry 实现
+     * @param registry
+     * @return
+     */
     @Bean
     @ConditionalOnMissingBean
     public RegistryClient registryClient(Registry registry) {
