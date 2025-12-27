@@ -59,6 +59,29 @@ public abstract class BaseHeartBeatTask<T extends HeartBeat> extends BaseDaemonT
 
     @Override
     public void run() {
+        /**
+         * 1. 为什么不会导致内存溢出和CPU飙高？
+         *    a. CPU方面：
+         *       - Thread.sleep(1000) 让线程每次循环休眠 1 秒，避免 while 循环空转占用 CPU
+         *       - 如果没有 sleep，while 循环会空转，导致 CPU 使用率接近 100%（单核）
+         *    b. 内存方面：
+         *       - 每次循环都会调用 getHeartBeat() 创建新的 heartBeat 对象（局部变量）
+         *       - 如果满足写入条件：heartBeat 赋值给 lastHeartBeat（成员变量），替换旧引用
+         *       - 如果不满足条件：heartBeat 是局部变量，循环结束后变成垃圾对象，可被 GC 回收
+         *       - 最多只有一个 heartBeat 对象存活（lastHeartBeat 指向的），不会有对象积累
+         *       - Thread.sleep 降低了对象创建频率，给 GC 充分的回收时间
+         *       - 如果没有 sleep，对象创建过快可能导致频繁 GC，GC 本身消耗 CPU，可能影响性能,增加 GC 压力（但通常不会直接 OOM）
+         * 
+         * 2. 为什么 runningFlag=false 时线程会退出？
+         *    a. while (runningFlag) 是条件循环，当 runningFlag 为 false 时循环条件不满足，循环退出
+         *    b. 循环退出后，run() 方法执行完毕，线程结束
+         *    c. shutdown() 方法会在服务器关闭时被调用（如 MasterRegistryClient.close()），将 runningFlag 设置为 false
+         *
+         * 心跳线程模式：通过 sleep 控制 CPU 使用和对象创建频率，通过标志位实现优雅退出
+         *
+         * 定期写入：距离上次写入时间 >= heartBeatInterval（默认 10 秒）
+         * 状态变化时立即写入：serverStatus 发生变化时立即写入
+         */
         while (runningFlag) {
             try {
                 T heartBeat = getHeartBeat();

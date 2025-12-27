@@ -51,6 +51,13 @@ public class MasterHeartBeatTask extends BaseHeartBeatTask<MasterHeartBeat> {
 
     private final int processId;
 
+    /**
+     * 设置线程名称,心跳间隔时间
+     * @param masterConfig
+     * @param metricsProvider
+     * @param registryClient
+     * @param masterCoordinator
+     */
     public MasterHeartBeatTask(@NonNull MasterConfig masterConfig,
                                @NonNull MetricsProvider metricsProvider,
                                @NonNull RegistryClient registryClient,
@@ -87,6 +94,7 @@ public class MasterHeartBeatTask extends BaseHeartBeatTask<MasterHeartBeat> {
     @Override
     public void writeHeartBeat(final MasterHeartBeat masterHeartBeat) {
         final String failoverNodePath = RegistryUtils.getFailoveredNodePath(masterHeartBeat);
+        //监测到故障转移节点
         if (registryClient.exists(failoverNodePath)) {
             log.warn("The master: {} is under {}, means it has been failover will close myself",
                     masterHeartBeat,

@@ -62,14 +62,39 @@ public class MasterRegistryClient implements AutoCloseable {
 
     private MasterHeartBeatTask masterHeartBeatTask;
 
+    /**
+     * 一、MasterHeartBeatTask通过有参数构造函数对参数赋值原因
+     *  1、要点：
+     *       a. 注册前需要调用 getHeartBeat() 获取数据
+     *       b. 线程启动在注册验证完成后
+     *       c. 如果使用 Spring 注入，Bean 会在容器初始化时创建，但此时可能未准备好
+     *  2、生命周期需要精确控制
+     *       a. 创建时机：在 start() 方法中按需创建
+     *       b. 启动时机：注册成功并验证后启动
+     *       c.关闭时机：在 close() 中调用 shutdown()
+     *  3、如果使用 Spring 管理：
+     *       a. Bean 会在容器初始化时创建，时机不对
+     *       b. 线程启动时机难以精确控制
+     *       c. 关闭需要配合 Spring 的销毁流程
+     *  4、与注册流程紧密耦合
+     *    心跳任务的创建和启动是注册流程的一部分，需要在 start() 中按顺序执行：
+     *      b. 创建心跳任务
+     *      c. 获取心跳数据检查负载
+     *      d. 注册到注册中心
+     *      e. 验证注册成功
+     *      f. 启动心跳线程
+     */
+
     public void start() {
         try {
             // 业务层心跳初始化,上报服务监控数据
             this.masterHeartBeatTask =
                     //通过有参数构造函数对参数赋值,为什么不再里面依赖注入呢?
+                    // 需要在注册前创建，但延迟启动线程 --》需要先创建心跳任务，获取心跳数据用于负载检查 -》 使用心跳数据注册到注册中心 -》最后才启动心跳线程
                     new MasterHeartBeatTask(masterConfig, metricsProvider, registryClient, masterCoordinator);
             // master registry
             registry();
+            // 连接状态监听
             registryClient.addConnectionStateListener(new MasterConnectionStateListener(registryClient));
         } catch (Exception e) {
             throw new RegistryException("Master registry client start up error", e);
@@ -103,7 +128,7 @@ public class MasterRegistryClient implements AutoCloseable {
         /**获取心跳数据(业务服务负载情况数据) {@link DefaultMetricsProvider#getSystemMetrics()} */
         MasterHeartBeat heartBeat = masterHeartBeatTask.getHeartBeat();
         /**
-         * 如果负载,则每隔1S获取负载数据,直到服务达标
+         * 负载保护 如果负载,则每隔1S获取负载数据,直到服务达标
          * {@link MasterConfig#serverLoadProtection}
          * {@link BaseServerLoadProtection#isOverload(SystemMetrics)} 再注册
          */
@@ -119,6 +144,7 @@ public class MasterRegistryClient implements AutoCloseable {
         log.info("Master node persisted to registry path: {}, host: {}", masterRegistryPath, NetUtils.getHost());
 
         int checkCount = 0;
+        // 等待故障转移
         while (!registryClient.checkNodeExists(NetUtils.getHost(), RegistryNodeType.MASTER)) {
             checkCount++;
             log.warn("The current master server node:{} cannot find in registry, check count: {}, registry path: {}", 

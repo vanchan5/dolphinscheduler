@@ -144,6 +144,8 @@ public class MasterServer implements IStoppable {
          * 1、业务心跳(守护线程间隔执行,模板方法)
          * 2、注册服务到zookeeper(CuratorFrameworkFactory客户端框架)
          *      MasterRegistryClient -》 RegistryClient -》Registry -》 ZookeeperRegistry
+         * 3、将 MasterServer 实例（实现了 IStoppable）注册到 RegistryClient
+         *    当注册中心检测到异常（连接断开、故障转移等）时，可回调 MasterServer.stop() 停止服务
          */
         // self tolerant
         this.masterRegistryClient.start();
