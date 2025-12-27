@@ -140,6 +140,11 @@ public class MasterServer implements IStoppable {
         TaskPluginManager.loadTaskPlugin();
         DataSourceProcessorProvider.initialize();
 
+        /**
+         * 1、业务心跳(守护线程间隔执行,模板方法)
+         * 2、注册服务到zookeeper(CuratorFrameworkFactory客户端框架)
+         *      MasterRegistryClient -》 RegistryClient -》Registry -》 ZookeeperRegistry
+         */
         // self tolerant
         this.masterRegistryClient.start();
         this.masterRegistryClient.setRegistryStoppable(this);

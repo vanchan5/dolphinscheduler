@@ -25,7 +25,10 @@ import org.apache.dolphinscheduler.common.model.MasterHeartBeat;
 import org.apache.dolphinscheduler.common.thread.ThreadUtils;
 import org.apache.dolphinscheduler.common.utils.JSONUtils;
 import org.apache.dolphinscheduler.common.utils.NetUtils;
+import org.apache.dolphinscheduler.meter.metrics.BaseServerLoadProtection;
+import org.apache.dolphinscheduler.meter.metrics.DefaultMetricsProvider;
 import org.apache.dolphinscheduler.meter.metrics.MetricsProvider;
+import org.apache.dolphinscheduler.meter.metrics.SystemMetrics;
 import org.apache.dolphinscheduler.registry.api.RegistryClient;
 import org.apache.dolphinscheduler.registry.api.RegistryException;
 import org.apache.dolphinscheduler.registry.api.enums.RegistryNodeType;
@@ -61,7 +64,9 @@ public class MasterRegistryClient implements AutoCloseable {
 
     public void start() {
         try {
+            // 业务层心跳初始化,上报服务监控数据
             this.masterHeartBeatTask =
+                    //通过有参数构造函数对参数赋值,为什么不再里面依赖注入呢?
                     new MasterHeartBeatTask(masterConfig, metricsProvider, registryClient, masterCoordinator);
             // master registry
             registry();
@@ -92,9 +97,16 @@ public class MasterRegistryClient implements AutoCloseable {
      */
     void registry() {
         log.info("Master node : {} registering to registry center", masterConfig.getMasterAddress());
+        // 空间:/dolphinscheduler 路径: /nodes/master/ip:port
         String masterRegistryPath = masterConfig.getMasterRegistryPath();
 
+        /**获取心跳数据(业务服务负载情况数据) {@link DefaultMetricsProvider#getSystemMetrics()} */
         MasterHeartBeat heartBeat = masterHeartBeatTask.getHeartBeat();
+        /**
+         * 如果负载,则每隔1S获取负载数据,直到服务达标
+         * {@link MasterConfig#serverLoadProtection}
+         * {@link BaseServerLoadProtection#isOverload(SystemMetrics)} 再注册
+         */
         while (ServerStatus.BUSY.equals(heartBeat.getServerStatus())) {
             log.warn("Master node is BUSY: {}", heartBeat);
             heartBeat = masterHeartBeatTask.getHeartBeat();

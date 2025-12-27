@@ -21,6 +21,14 @@ import org.apache.dolphinscheduler.common.thread.BaseDaemonThread;
 
 import lombok.extern.slf4j.Slf4j;
 
+/**
+ * 心跳任务抽象基类，使用模板方法模式。
+ *
+ * <p>模板方法：{@link #run()} 定义算法骨架
+ * <p>抽象方法：{@link #getHeartBeat()} 和 {@link BaseHeartBeatTask#writeHeartBeat(HeartBeat)} 由子类实现
+ *
+ * @param <T> 心跳数据类型，必须实现 {@link HeartBeat} 接口
+ */
 @Slf4j
 public abstract class BaseHeartBeatTask<T extends HeartBeat> extends BaseDaemonThread {
 
