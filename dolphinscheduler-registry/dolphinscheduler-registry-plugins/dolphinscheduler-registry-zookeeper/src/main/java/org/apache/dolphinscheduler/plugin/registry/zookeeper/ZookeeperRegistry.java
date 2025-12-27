@@ -218,13 +218,77 @@ final class ZookeeperRegistry implements Registry {
         }
     }
 
+    /**
+     * 订阅指定路径的节点变化事件
+     * <p>
+     * 该方法用于监听 ZooKeeper 中指定路径及其子路径的所有节点变化事件（添加、更新、删除）。
+     * 当节点发生变化时，会通过 {@link SubscribeListener#notify(Event)} 回调通知上层应用。
+     * <p>
+     * 工作原理：
+     * 1. 使用 {@link TreeCache} 来监听路径及其所有子节点的变化
+     * 2. TreeCache 是 Curator 提供的高级缓存机制，会自动维护指定路径下的所有节点的本地缓存
+     * 3. 当节点发生变化时（添加、更新、删除），TreeCache 会触发事件
+     * 4. 通过 {@link ZookeeperTreeCacheListenerAdapter} 适配器将 TreeCache 事件转换为 DolphinScheduler 统一的 {@link Event}
+     * 5. 根据 {@link SubscribeListener#getSubscribeScope()} 决定监听范围（路径本身、子节点、或全部）
+     * <p>
+     * TreeCache 特性：
+     * - 自动缓存：首次订阅时会获取路径下的所有节点数据并缓存在本地
+     * - 事件通知：节点变化时通过监听器实时通知
+     * - 递归监听：自动监听路径下所有子节点的变化
+     * - 自动重连：连接断开重连后会自动重建缓存并继续监听
+     * <p>
+     * 监听范围说明（SubscribeScope）：
+     * - PATH_ONLY：只监听路径本身的变化（不包含子节点）
+     * - CHILDREN_ONLY：只监听直接子节点的变化（不包含路径本身）
+     * - ALL：监听路径本身及其所有子节点的变化（递归）
+     * <p>
+     * 事件类型说明：
+     * - ADD：节点被创建
+     * - UPDATE：节点的数据被更新
+     * - REMOVE：节点被删除
+     * <p>
+     * 使用场景：
+     * - 服务发现：监听服务节点列表的变化（如监听 /nodes/master 下的所有 Master 节点）
+     * - 配置中心：监听配置节点的变化，实现配置热更新
+     * - 集群管理：监听集群节点的上下线事件
+     * <p>
+     * 资源管理：
+     * - TreeCache 实例会被缓存在 {@link #treeCacheMap} 中，同一个路径只会创建一个 TreeCache 实例（复用）
+     * - 多个监听器可以订阅同一个路径，它们会共享同一个 TreeCache 实例
+     * - TreeCache 在 {@link #close()} 方法中会被关闭并清理
+     * <p>
+     * 异常处理：
+     * - 如果 TreeCache 启动失败，会从缓存中移除该实例，并抛出 {@link RegistryException}
+     * - TreeCache 内部会自动处理 ZooKeeper 连接异常和重连
+     * <p>
+     * 线程安全：
+     * - {@code computeIfAbsent()} 是线程安全的，可以并发调用
+     * - TreeCache 的事件监听器可能在后台线程中调用，确保 listener 的实现是线程安全的
+     * <p>
+     * 最佳实践：
+     * - 建议在 {@link #start()} 方法调用之后再订阅路径，确保客户端已连接
+     * - 同一个路径的多个监听器应该使用相同的 SubscribeScope，避免混淆
+     * - 监听器应该快速处理事件，避免阻塞事件处理线程
+     *
+     * @param path     要监听的节点路径，必须是有效的 ZooKeeper 路径
+     * @param listener 事件监听器，当节点发生变化时会调用其 {@code notify()} 方法
+     * @throws RegistryException 如果 TreeCache 启动失败
+     * @see TreeCache Curator 的树形缓存实现
+     * @see ZookeeperTreeCacheListenerAdapter TreeCache 事件适配器
+     * @see SubscribeListener 订阅监听器接口
+     * @see Event 事件对象
+     */
     @Override
     public void subscribe(final String path, final SubscribeListener listener) {
+        // 获取或创建 TreeCache 实例（同一个路径复用同一个 TreeCache）
         final TreeCache treeCache = treeCacheMap.computeIfAbsent(path, $ -> new TreeCache(client, path));
+        // 创建适配器，将 TreeCache 事件转换为 DolphinScheduler 的 Event，并根据 SubscribeScope 过滤事件
         treeCache.getListenable().addListener(new ZookeeperTreeCacheListenerAdapter(path, listener));
         try {
+            // 启动 TreeCache，开始监听路径变化（如果已经启动则不会重复启动）
             treeCache.start();
         } catch (Exception e) {
+            // 启动失败时从缓存中移除，避免缓存无效的 TreeCache 实例
             treeCacheMap.remove(path);
             throw new RegistryException("Failed to subscribe listener for key: " + path, e);
         }

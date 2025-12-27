@@ -66,11 +66,14 @@ public class ClusterManager {
      * <p> 3. Subscribe the master change event.
      */
     private void initializeMasterClusters() {
+        //注册并初始化MasterSlotChangeListener
         this.masterClusters.registerListener(new MasterSlotChangeListenerAdaptor(masterSlotManager, masterClusters));
 
         registryClient.getServerList(RegistryNodeType.MASTER).forEach(server -> {
             final MasterHeartBeat masterHeartBeat =
                     JSONUtils.parseObject(server.getHeartBeatInfo(), MasterHeartBeat.class);
+
+            //
             masterClusters.onServerAdded(MasterServerMetadata.parseFromHeartBeat(masterHeartBeat));
         });
         log.info("Initialized MasterClusters: {}", JSONUtils.toPrettyJsonString(masterClusters.getServers()));
