@@ -19,6 +19,9 @@ package org.apache.dolphinscheduler.server.master.cluster;
 
 import java.util.List;
 
+/**
+ * 更新master服务分片信息
+ */
 public class MasterSlotChangeListenerAdaptor
         implements
             IMasterSlotChangeListener,

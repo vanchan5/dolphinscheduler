@@ -43,6 +43,10 @@ public class MasterClusters extends AbstractClusterSubscribeListener<MasterServe
      **/
     private final Map<String, MasterServerMetadata> masterServerMap = new ConcurrentHashMap<>();
 
+    /**
+     * 所有IClustersChangeListener<MasterServerMetadata>监听器,
+     * {@link MasterSlotChangeListenerAdaptor} 更新master服务分片信息
+     */
     private final List<IClustersChangeListener<MasterServerMetadata>> masterClusterChangeListeners =
             new CopyOnWriteArrayList<>();
 

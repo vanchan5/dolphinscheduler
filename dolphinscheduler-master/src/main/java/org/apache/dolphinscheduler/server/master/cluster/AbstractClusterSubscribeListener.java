@@ -29,6 +29,7 @@ public abstract class AbstractClusterSubscribeListener<T extends BaseServerMetad
     public void notify(Event event) {
         try {
             // make sure the event is processed in order
+            // 确保事件按顺序处理
             synchronized (this) {
                 Event.Type type = event.getType();
                 T server = parseServerFromHeartbeat(event.getEventData());

@@ -128,6 +128,7 @@ public class MasterServer implements IStoppable {
      */
     @PostConstruct
     public void initialized() {
+        //设置服务状态
         ServerLifeCycleManager.toRunning();
         final long startupTime = System.currentTimeMillis();
 
@@ -151,6 +152,7 @@ public class MasterServer implements IStoppable {
          */
         // self tolerant
         this.masterRegistryClient.start();
+        // 将当前对象注册到客户端stop,后续监听停止服务
         this.masterRegistryClient.setRegistryStoppable(this);
 
         this.masterCoordinator.start();
@@ -180,6 +182,9 @@ public class MasterServer implements IStoppable {
          *
          */
         this.clusterManager.start();
+        /**
+         * 负责启动集群状态监控，监听 Master 和 Worker 节点的移除，并触发故障转移
+         */
         this.clusterStateMonitors.start();
 
         this.workflowEngine.start();
