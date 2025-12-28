@@ -184,6 +184,9 @@ public class MasterServer implements IStoppable {
         this.clusterManager.start();
         /**
          * 负责启动集群状态监控，监听 Master 和 Worker 节点的移除，并触发故障转移
+         *
+         * ZooKeeper → TreeCache → ZookeeperTreeCacheListenerAdapter.childEvent() →
+         * AbstractClusterSubscribeListener.notify() → MasterClusters.onServerRemove()
          */
         this.clusterStateMonitors.start();
 
