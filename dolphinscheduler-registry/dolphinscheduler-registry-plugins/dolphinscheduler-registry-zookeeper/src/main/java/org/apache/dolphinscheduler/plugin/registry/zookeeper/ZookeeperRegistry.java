@@ -371,8 +371,64 @@ final class ZookeeperRegistry implements Registry {
         }
     }
 
+    /**
+     * 获取分布式锁（阻塞式，无限等待）
+     * <p>
+     * 该方法用于在 ZooKeeper 中获取指定路径的分布式锁。如果锁已被其他进程持有，当前线程会阻塞等待直到锁被释放。
+     * 使用 Curator 的 {@link InterProcessMutex} 实现，支持跨进程的互斥锁。
+     * <p>
+     * 工作原理：
+     * 1. 使用 ThreadLocal 存储每个线程的锁映射表，避免线程间锁对象冲突
+     * 2. 对于同一个 key，如果当前线程已获取过锁，会复用同一个 InterProcessMutex 实例
+     * 3. 检查锁是否已被当前进程获取（可重入检查），如果已获取则直接返回 true
+     * 4. 如果未获取，调用 {@code interProcessMutex.acquire()} 阻塞式获取锁（无限等待）
+     * 5. 获取成功后，将锁对象存入 ThreadLocal 映射表，便于后续释放
+     * <p>
+     * 可重入性说明：
+     * - 虽然 ZooKeeper 的 InterProcessMutex 本身支持可重入，但为了与 etcd/jdbc 等不支持可重入的注册中心保持一致，
+     *   这里做了特殊处理：如果当前进程已经获取了该锁，直接返回 true，避免重复获取
+     * - 这意味着多次调用 acquireLock 获取同一个锁时，只需要调用一次 releaseLock 即可释放
+     * <p>
+     * 线程安全：
+     * - ThreadLocal 确保每个线程有独立的锁映射表，线程间互不干扰
+     * - InterProcessMutex 是线程安全的，可以在多线程环境中使用
+     * - 同一个线程多次获取同一个锁时，会复用同一个 InterProcessMutex 实例
+     * <p>
+     * 异常处理：
+     * - 如果获取锁过程中发生异常，会尝试释放可能已部分获取的锁
+     * - 释放锁失败时，会抛出包含原始异常的 RegistryException
+     * <p>
+     * 使用场景：
+     * - 分布式任务调度：确保同一时间只有一个 Master 节点执行某个关键操作
+     * - 资源竞争控制：防止多个进程同时访问共享资源
+     * - 分布式协调：实现分布式环境下的互斥操作
+     * <p>
+     * 注意事项：
+     * - 该方法会无限期阻塞，直到获取到锁。如果需要超时控制，请使用 {@link #acquireLock(String, long)}
+     * - 获取锁后必须调用 {@link #releaseLock(String)} 释放锁，否则会导致死锁
+     * - 建议在 try-finally 块中使用，确保锁一定会被释放
+     * <p>
+     * 示例：
+     * <pre>{@code
+     *   try {
+     *       if (registry.acquireLock("/locks/task-123")) {
+     *           // 执行需要互斥的操作
+     *       }
+     *   } finally {
+     *       registry.releaseLock("/locks/task-123");
+     *   }
+     * }</pre>
+     *
+     * @param key 锁的路径，必须是有效的 ZooKeeper 路径
+     * @return true 如果成功获取锁，false 不会返回（因为会无限阻塞）
+     * @throws RegistryException 如果获取锁过程中发生异常（如连接断开、网络错误等）
+     * @see InterProcessMutex Curator 的分布式互斥锁实现
+     * @see #acquireLock(String, long) 带超时的获取锁方法
+     * @see #releaseLock(String) 释放锁方法
+     */
     @Override
     public boolean acquireLock(String key) {
+        // 从 ThreadLocal 获取当前线程的锁映射表，如果不存在则创建新的映射表
         Map<String, InterProcessMutex> processMutexMap = threadLocalLockMap.get();
         if (null == processMutexMap) {
             processMutexMap = new HashMap<>();
@@ -380,24 +436,38 @@ final class ZookeeperRegistry implements Registry {
         }
         InterProcessMutex interProcessMutex = null;
         try {
+            // 从映射表中获取已存在的锁对象，如果不存在则创建新的 InterProcessMutex 实例
+            // 同一个 key 在同一线程中会复用同一个锁对象，避免重复创建
             interProcessMutex =
                     Optional.ofNullable(processMutexMap.get(key)).orElse(new InterProcessMutex(client, key));
+            // 检查锁是否已被当前进程获取（可重入检查）
+            // 由于 etcd/jdbc 等注册中心无法实现可重入锁，为了保持接口一致性，
+            // 如果锁已被当前进程获取，直接返回 true，避免重复获取
+            // 这意味着多次获取同一个锁时，只需要释放一次即可
             if (interProcessMutex.isAcquiredInThisProcess()) {
                 // Since etcd/jdbc cannot implement a reentrant lock, we need to check if the lock is already acquired
                 // If it is already acquired, return true directly
                 // This means you only need to release once when you acquire multiple times
                 return true;
             }
+            // 阻塞式获取锁，无限等待直到获取成功
+            // 如果锁被其他进程持有，当前线程会一直阻塞在这里
             interProcessMutex.acquire();
+            // 将锁对象存入 ThreadLocal 映射表，便于后续释放锁时查找
             processMutexMap.put(key, interProcessMutex);
             return true;
         } catch (Exception e) {
+            // 获取锁失败时的异常处理
             try {
+                // 如果锁对象已创建但获取失败，尝试释放可能已部分获取的锁
+                // 这可以防止在异常情况下锁资源泄漏
                 if (interProcessMutex != null) {
                     interProcessMutex.release();
                 }
                 throw new RegistryException(String.format("zookeeper get lock: %s error", key), e);
             } catch (Exception exception) {
+                // 如果释放锁也失败，抛出包含原始异常的 RegistryException
+                // 保留原始异常信息，便于排查问题
                 throw new RegistryException(String.format("zookeeper get lock: %s error", key), e);
             }
         }

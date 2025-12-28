@@ -29,10 +29,11 @@ import org.apache.dolphinscheduler.meter.metrics.SystemMetrics;
 import org.apache.dolphinscheduler.plugin.datasource.api.plugin.DataSourceProcessorProvider;
 import org.apache.dolphinscheduler.plugin.storage.api.StorageConfiguration;
 import org.apache.dolphinscheduler.plugin.task.api.TaskPluginManager;
+import org.apache.dolphinscheduler.registry.api.RegistryClient;
 import org.apache.dolphinscheduler.registry.api.RegistryConfiguration;
+import org.apache.dolphinscheduler.registry.api.SubscribeListener;
 import org.apache.dolphinscheduler.scheduler.api.SchedulerApi;
-import org.apache.dolphinscheduler.server.master.cluster.ClusterManager;
-import org.apache.dolphinscheduler.server.master.cluster.ClusterStateMonitors;
+import org.apache.dolphinscheduler.server.master.cluster.*;
 import org.apache.dolphinscheduler.server.master.config.MasterConfig;
 import org.apache.dolphinscheduler.server.master.engine.MasterCoordinator;
 import org.apache.dolphinscheduler.server.master.engine.WorkflowEngine;
@@ -47,6 +48,7 @@ import org.apache.dolphinscheduler.service.ServiceConfiguration;
 import org.apache.dolphinscheduler.service.bean.SpringApplicationContext;
 
 import java.util.Date;
+import java.util.List;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
@@ -153,6 +155,30 @@ public class MasterServer implements IStoppable {
 
         this.masterCoordinator.start();
 
+        /**
+         * 启动集群管理器
+         * 1、初始化 Master 集群：
+         *     - 注册 Master 槽位变化监听器（MasterSlotChangeListener）{@link MasterClusters#registerListener(IClusters.IClustersChangeListener)}
+         *     - 从注册中心获取所有 Master 节点并添加到集群 {@link MasterClusters#onServerAdded(MasterServerMetadata)}
+         *     - 订阅 Master 节点变化事件，实现动态感知集群变化 {@link RegistryClient#subscribe(String, SubscribeListener)}
+         * 2、初始化 Worker 集群：
+         *     - 从注册中心获取所有 Worker 节点并添加到集群
+         *     - 订阅 Worker 节点变化事件
+         *     - 注册 Worker 组变化通知器，监听 Worker 组配置变化
+         *
+         *
+         * 集群流程:
+         * master服务启动增加本身到集群{@link MasterClusters#onServerAdded(MasterServerMetadata)} ->
+         * 服务启动订阅TreeCache{@link RegistryClient#subscribe(String, SubscribeListener)} ->
+         * 适配器模式,TreeCacheListener监听 {@link MasterSlotChangeListenerAdaptor#onMasterSlotChanged(List)} ->
+         * 回调通知上层应用 ->
+         * 实现整个集群masterServerMap一致  {@link MasterClusters#onServerAdded(MasterServerMetadata)}->
+         * 实现mester服务集群互相监控 -〉
+         * master基于slot处理各自的Command ->
+         * 通过selector分发任务给worker，实现Master集群和Worker集群无中心
+         *
+         *
+         */
         this.clusterManager.start();
         this.clusterStateMonitors.start();
 

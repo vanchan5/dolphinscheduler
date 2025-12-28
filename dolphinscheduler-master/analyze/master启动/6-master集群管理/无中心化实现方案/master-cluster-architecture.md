@@ -123,7 +123,9 @@ sequenceDiagram
     CM->>CM: initializeMasterClusters()
     
     Note over MC,MSM: 2.1 注册 Slot 变化监听器
+    rect rgb(255, 100, 100)
     CM->>MC: registerListener(MasterSlotChangeListenerAdaptor)
+    end
     MC->>MSM: 保存引用
     
     Note over RC,ZK: 2.2 获取现有 Master 列表
@@ -441,9 +443,10 @@ graph TB
     subgraph Worker["Worker 选择层"]
         WLB[WorkerLoadBalancer<br/>负载均衡器]
         WC[WorkerClusters<br/>Worker 集群视图]
+        WN[Worker 节点]
         WER --> WLB
         WLB --> WC
-        WLB -->|选择 Worker| Worker[Worker 节点]
+        WLB -->|选择 Worker| WN
     end
     
     style Registry fill:#e3f2fd
@@ -818,6 +821,7 @@ graph TD
     B1 --> B2[registerListener<br/>MasterSlotChangeListenerAdaptor]
     B1 --> B3[getServerList<br/>获取现有 Master]
     B1 --> B4[subscribe<br/>订阅 TreeCache]
+    B3 --> B5[ masterClusters.onServerAdded<br/>添加所有服务到当前服务维护的集群信息]
     
     B4 --> C1[ZookeeperRegistry.subscribe]
     C1 --> C2[TreeCache.start<br/>开始监听]
@@ -837,6 +841,7 @@ graph TD
     F3 --> G1[WorkflowExecutionRunnable]
     G1 --> G2[WorkerLoadBalancer.select]
     G2 --> G3[分发任务到 Worker]
+    B5 --> E3
     
     style Start fill:#4caf50
     style E3 fill:#ff9800
