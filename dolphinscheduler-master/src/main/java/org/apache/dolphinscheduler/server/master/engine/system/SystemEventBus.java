@@ -40,6 +40,18 @@ public class SystemEventBus extends AbstractDelayEventBus<AbstractSystemEvent> {
         log.info("Published SystemEvent: {}", event);
     }
 
+    /**
+     * 🌟DelayQueue.take()工作原理🌟
+     *
+     * DelayQueue`内部使用`PriorityQueue`按过期时间排序
+     * - `take()`方法会：
+     *   1. 获取队列头部元素
+     *   2. 调用`getDelay()`检查是否到期
+     *   3. 如果未到期，使用`Condition.awaitNanos()`阻塞等待
+     *   4. 如果到期，返回该元素
+     * @return
+     * @throws InterruptedException
+     */
     public AbstractSystemEvent take() throws InterruptedException {
         return delayEventQueue.take();
     }

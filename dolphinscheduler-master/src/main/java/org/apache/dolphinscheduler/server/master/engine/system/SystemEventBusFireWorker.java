@@ -67,6 +67,7 @@ public class SystemEventBusFireWorker extends BaseDaemonThread implements AutoCl
         while (flag) {
             final AbstractSystemEvent systemEvent;
             try {
+                // 阻塞等待
                 systemEvent = systemEventBus.take();
             } catch (InterruptedException interruptedException) {
                 Thread.currentThread().interrupt();
