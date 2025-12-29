@@ -335,6 +335,127 @@ stateDiagram-v2
 | **Master重连** | MasterFailoverEvent延迟检查 | 启动时间相同 | 跳过故障转移 |
 | **Workflow已恢复** | 内存检查 | workflowRepository.contains() | 跳过故障转移 |
 
+### 2.3.6 Master 与 Worker 故障转移处理对象的区别
+
+#### 2.3.6.1 处理对象对比
+
+| 故障类型 | 处理对象 | 数据来源 | 处理方式 | 说明 |
+|---------|---------|---------|---------|------|
+| **Master 故障转移** | **工作流实例（WorkflowInstance）** | 数据库查询 | 标记为 FAILOVER，插入恢复 Command | Master 负责工作流的调度和管理 |
+| **Worker 故障转移** | **任务实例（TaskInstance）** | 内存中运行的任务 | 发布 TaskFailoverLifecycleEvent | Worker 只负责执行任务 |
+
+#### 2.3.6.2 Master 故障转移处理工作流的原因
+
+**Master 的职责**：
+- Master 负责工作流的**调度、管理和监控**
+- 工作流实例存储在数据库中，由 Master 负责维护其生命周期
+- 当 Master 故障时，其负责的所有工作流都需要被其他 Master 接管
+
+**处理流程**：
+1. **查询工作流**：从数据库查询该 Master 负责的所有未完成的工作流
+   ```java
+   // FailoverCoordinator.getFailoverWorkflowsForMaster()
+   workflowInstanceDao.queryNeedFailoverWorkflowInstances(masterAddress)
+   ```
+
+2. **标记工作流**：将工作流状态更新为 `FAILOVER`
+   ```java
+   // WorkflowFailover.failoverWorkflow()
+   workflowInstanceDao.updateWorkflowInstanceState(id, originalState, FAILOVER)
+   ```
+
+3. **插入恢复命令**：插入 `RECOVER_TOLERANCE_FAULT_PROCESS` 类型的 Command
+   ```java
+   // WorkflowFailover.failoverWorkflow()
+   commandDao.insert(Command.builder()
+       .commandType(RECOVER_TOLERANCE_FAULT_PROCESS)
+       .workflowInstanceId(workflowInstance.getId())
+       .build())
+   ```
+
+4. **后续处理**：CommandEngine 会处理恢复命令，重新调度工作流执行
+   - 工作流恢复后，其中的任务会重新被调度到可用的 Worker 执行
+   - **任务实例的故障转移在工作流恢复时自动处理**
+
+#### 2.3.6.3 Worker 故障转移只处理任务的原因
+
+**Worker 的职责**：
+- Worker 只负责**执行任务**，不管理工作流
+- 任务实例在内存中运行，由 Master 监控和管理
+- 当 Worker 故障时，只需要将该 Worker 正在执行的任务转移到其他 Worker
+
+**处理流程**：
+1. **查询任务**：从内存中查询该 Worker 正在执行的所有任务
+   ```java
+   // FailoverCoordinator.getFailoverTaskForWorker()
+   workflowRepository.getAll()
+       .stream()
+       .flatMap(graph -> graph.getActiveTaskExecutionRunnable().stream())
+       .filter(task -> workerAddress.equals(task.getTaskInstance().getHost()))
+       .filter(task -> task.getState() == DISPATCH || task.getState() == RUNNING_EXECUTION)
+   ```
+
+2. **发布任务故障转移事件**：为每个任务发布 `TaskFailoverLifecycleEvent`
+   ```java
+   // TaskFailover.failoverTask()
+   taskEventBus.publish(TaskFailoverLifecycleEvent)
+   ```
+
+3. **任务重新调度**：任务状态机处理故障转移事件，将任务重新调度到其他 Worker
+   - 任务会重新进入调度队列，等待分配到可用的 Worker
+   - **工作流不受影响，继续运行**
+
+#### 2.3.6.4 为什么 Master 故障转移不直接处理任务？
+
+**原因分析**：
+
+1. **工作流是管理单元**：
+   - 工作流是任务的组织单元，Master 管理的是工作流级别
+   - 工作流故障转移后，其中的任务会在工作流恢复时自动重新调度
+
+2. **数据一致性**：
+   - 工作流状态存储在数据库中，需要统一管理
+   - 如果直接处理任务，可能导致工作流状态不一致
+
+3. **恢复粒度**：
+   - 工作流级别的恢复可以保证整个工作流的完整性
+   - 任务级别的恢复可能无法保证工作流的状态一致性
+
+4. **简化设计**：
+   - 工作流恢复时，CommandEngine 会重新解析 DAG 并调度任务
+   - 这样可以确保任务调度的正确性和一致性
+
+#### 2.3.6.5 总结
+
+```mermaid
+graph TB
+    subgraph "Master故障转移"
+        A[Master故障] --> B[查询工作流实例]
+        B --> C[标记工作流为FAILOVER]
+        C --> D[插入恢复Command]
+        D --> E[CommandEngine处理]
+        E --> F[重新调度工作流]
+        F --> G[工作流中的任务自动重新调度]
+    end
+    
+    subgraph "Worker故障转移"
+        H[Worker故障] --> I[查询任务实例]
+        I --> J[发布TaskFailoverLifecycleEvent]
+        J --> K[任务状态机处理]
+        K --> L[任务重新调度到其他Worker]
+        L --> M[工作流继续运行]
+    end
+    
+    style A fill:#ffcccc
+    style H fill:#ccffcc
+    style C fill:#ffffcc
+    style J fill:#ffffcc
+```
+
+**关键区别**：
+- **Master 故障转移**：工作流级别 → 数据库持久化 → 通过 Command 恢复 → 任务自动重新调度
+- **Worker 故障转移**：任务级别 → 内存中处理 → 直接重新调度 → 工作流不受影响
+
 ### 2.4 延迟30秒的实现机制
 
 #### 2.4.1 DelayQueue的用法和设计思想
@@ -371,7 +492,7 @@ classDiagram
     
     class PriorityQueue~E~ {
         -Object[] queue
-        -Comparator~? super E~ comparator
+        -Comparator~E~ comparator
         +offer(E e) boolean
         +poll() E
         +peek() E
@@ -401,6 +522,33 @@ classDiagram
 ##### 2.4.1.3 项目中的DelayQueue设计思想
 
 DolphinScheduler使用DelayQueue实现了一个**延迟事件总线**的设计模式，具有以下设计思想：
+
+**核心约束：事件必须实现Delayed接口**
+
+DelayQueue要求存储的元素必须实现`Delayed`接口，这是使用DelayQueue的前提条件：
+
+1. **继承关系**：`T extends AbstractDelayEvent`，而`AbstractDelayEvent implements Delayed`
+   - 所有事件类必须继承`AbstractDelayEvent`
+   - `AbstractDelayEvent`实现了`Delayed`接口
+
+2. **必须重写的方法**：
+   - **`getDelay(TimeUnit unit)`**：计算剩余延迟时间
+     ```java
+     // 返回剩余延迟时间 = 过期时间 - 当前时间
+     long delay = expiredTimeInNano - System.nanoTime();
+     return unit.convert(delay, TimeUnit.NANOSECONDS);
+     ```
+   
+   - **`compareTo(Delayed other)`**：用于排序，按过期时间排序
+     ```java
+     // 按过期时间升序排序，过期时间早的排在前面
+     return Long.compare(this.expiredTimeInNano, ((AbstractDelayEvent) other).expiredTimeInNano);
+     ```
+
+3. **排序机制**：
+   - DelayQueue内部使用`PriorityQueue`（优先级堆）
+   - 根据`compareTo()`方法排序，过期时间早的事件排在堆顶
+   - 每次`take()`时，总是取出最早到期的事件
 
 **1. 分层抽象设计**
 
@@ -440,6 +588,10 @@ classDiagram
     
     class WorkflowEventBus {
         +publish(AbstractLifecycleEvent) void
+    }
+    
+    class Delayed {
+        <<interface>>
     }
     
     IEvent <|.. AbstractDelayEvent
