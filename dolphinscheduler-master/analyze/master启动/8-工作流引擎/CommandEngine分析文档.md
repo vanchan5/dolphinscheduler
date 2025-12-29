@@ -1011,4 +1011,77 @@ CommandEngine 适用于以下场景：
 - `WorkflowFailoverCommandHandler.java` - 工作流故障转移处理器
 - `BackfillWorkflowCommandHandler.java` - 补数处理器
 - `ScheduleWorkflowCommandHandler.java` - 调度处理器
-- `RecoverSuspendWorkflowComm
+- `RecoverSuspendWorkflowCommandHandler.java` - 恢复暂停处理器
+
+### 11.3 相关接口和类
+
+- `Command.java` - 命令实体类
+- `CommandType.java` - 命令类型枚举
+- `WorkflowExecutionRunnable.java` - 工作流执行任务
+- `IWorkflowRepository.java` - 工作流仓库接口
+- `WorkflowEventBusCoordinator.java` - 事件总线协调器
+- `MasterSlotManager.java` - 槽位管理器
+- `CommandDao.java` - 命令数据访问对象
+
+## 12. 参考资料
+
+### 12.1 设计模式
+
+- **策略模式（Strategy Pattern）**：定义一系列算法，把它们封装起来，并且使它们可相互替换
+- **模板方法模式（Template Method Pattern）**：定义一个操作中算法的骨架，而将一些步骤延迟到子类中
+- **工厂模式（Factory Pattern）**：定义一个创建对象的接口，让子类决定实例化哪一个类
+- **命令模式（Command Pattern）**：将一个请求封装成一个对象，从而使您可以用不同的请求对客户进行参数化
+
+### 12.2 相关文档
+
+- Apache DolphinScheduler 官方文档
+- DolphinScheduler 架构设计文档
+- Master 服务器启动流程文档
+- 工作流执行引擎文档
+
+### 12.3 关键概念
+
+- **Command**：命令对象，封装了工作流执行的请求信息
+- **CommandType**：命令类型，定义了不同的命令类型（启动、重跑、恢复等）
+- **Handler**：命令处理器，负责处理特定类型的命令
+- **WorkflowExecutionRunnable**：工作流执行任务，封装了工作流实例的执行逻辑
+- **WorkflowExecutionGraph**：工作流执行图，表示工作流的执行状态和任务依赖关系
+- **EventBus**：事件总线，用于组件间的事件通信
+- **Slot**：槽位，用于分布式环境下的命令分配
+
+## 13. 附录
+
+### 13.1 命令类型说明
+
+| CommandType | 说明 | Handler |
+|------------|------|---------|
+| START_PROCESS | 启动工作流 | RunWorkflowCommandHandler |
+| REPEAT_RUNNING | 重跑工作流 | ReRunWorkflowCommandHandler |
+| START_FAILURE_TASK_PROCESS | 恢复失败任务 | RecoverFailureTaskCommandHandler |
+| RECOVER_TOLERANCE_FAULT_PROCESS | 故障转移 | WorkflowFailoverCommandHandler |
+| COMPLEMENT_DATA | 数据补数 | BackfillWorkflowCommandHandler |
+| SCHEDULER | 定时调度 | ScheduleWorkflowCommandHandler |
+| RECOVER_SUSPENDED_PROCESS | 恢复暂停 | RecoverSuspendWorkflowCommandHandler |
+
+### 13.2 关键配置参数
+
+- **command.fetch.size**：每次获取的命令数量
+- **command.fetch.id.step**：命令ID步长
+- **master.command.thread.pool.size**：命令处理线程池大小（默认：CPU核心数）
+- **master.server.load.protection.enabled**：是否启用负载保护
+- **master.server.load.protection.cpu.max.usage**：CPU最大使用率阈值
+- **master.server.load.protection.memory.max.usage**：内存最大使用率阈值
+
+### 13.3 监控指标
+
+- **master.consume.command**：Master消费命令数量
+- **master.overload**：Master过载次数
+- **command.query.time**：命令查询耗时
+- **command.handle.time**：命令处理耗时
+
+### 13.4 常见问题
+
+1. **命令处理慢**
+  - 检查系统负载是否过高
+  - 检查数据库连接是否正常
+  - 检查
