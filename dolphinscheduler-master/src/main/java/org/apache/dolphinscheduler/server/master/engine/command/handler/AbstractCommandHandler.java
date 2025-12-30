@@ -73,15 +73,22 @@ public abstract class AbstractCommandHandler implements ICommandHandler {
     public WorkflowExecutionRunnable handleCommand(final Command command) {
         final WorkflowExecuteContextBuilder workflowExecuteContextBuilder = WorkflowExecuteContext.builder()
                 .withCommand(command);
-
+        // 组装工作流定义
         assembleWorkflowDefinition(workflowExecuteContextBuilder);
+        // 组装项目信息
         assembleProject(workflowExecuteContextBuilder);
+        // 组装工作流有向无环图
         assembleWorkflowGraph(workflowExecuteContextBuilder);
+        // 组装工作流实例(子类实现)
         assembleWorkflowInstance(workflowExecuteContextBuilder);
+        // 组装工作流实例生命周期监听器
         assembleWorkflowInstanceLifecycleListeners(workflowExecuteContextBuilder);
+        //组装事件总线
         assembleWorkflowEventBus(workflowExecuteContextBuilder);
+        //组装任务执行图
         assembleWorkflowExecutionGraph(workflowExecuteContextBuilder);
 
+        // 创建workflowExecutionRunnable
         final WorkflowExecutionRunnableBuilder workflowExecutionRunnableBuilder = WorkflowExecutionRunnableBuilder
                 .builder()
                 .workflowExecuteContextBuilder(workflowExecuteContextBuilder)

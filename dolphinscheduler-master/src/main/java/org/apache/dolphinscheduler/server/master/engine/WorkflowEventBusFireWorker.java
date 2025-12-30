@@ -23,7 +23,10 @@ import static com.google.common.base.Preconditions.checkState;
 import org.apache.dolphinscheduler.common.thread.ThreadUtils;
 import org.apache.dolphinscheduler.dao.entity.WorkflowInstance;
 import org.apache.dolphinscheduler.plugin.task.api.utils.LogUtils;
+import org.apache.dolphinscheduler.server.master.engine.command.CommandEngine;
 import org.apache.dolphinscheduler.server.master.engine.exceptions.WorkflowEventFireException;
+import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.AbstractWorkflowLifecycleLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.handler.AbstractWorkflowLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.runner.IWorkflowExecuteContext;
 import org.apache.dolphinscheduler.server.master.utils.ExceptionUtils;
@@ -96,6 +99,10 @@ public class WorkflowEventBusFireWorker {
         return registeredWorkflowExecuteRunnableMap.size();
     }
 
+    /**
+     * registeredWorkflowExecuteRunnableMap的写入 {@link CommandEngine#bootstrapWorkflowExecutionRunnable(IWorkflowExecutionRunnable)}
+     * @return
+     */
     private List<IWorkflowExecutionRunnable> getWaitingFireWorkflowExecutionRunnables() {
         if (MapUtils.isEmpty(registeredWorkflowExecuteRunnableMap)) {
             return Collections.emptyList();
@@ -124,6 +131,10 @@ public class WorkflowEventBusFireWorker {
                 // If the database connection is failed, do not remove the event from the event bus
                 // so that the event can be fired again when the database connection is recovered
                 if (ExceptionUtils.isDatabaseConnectedFailedException(ex)) {
+                    /**
+                     * 失败之后重新发布事件,事件处理
+                     * {@link AbstractWorkflowLifecycleEventHandler#handle(IWorkflowExecutionRunnable, AbstractWorkflowLifecycleLifecycleEvent)}
+                     */
                     workflowEventBus.publish(lifecycleEvent);
                     ThreadUtils.sleep(5_000);
                     return;

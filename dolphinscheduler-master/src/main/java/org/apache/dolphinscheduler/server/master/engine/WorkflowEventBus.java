@@ -25,6 +25,7 @@ import lombok.Data;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
 
 /**
  * The event bus for workflow, this is used to store the whole event in a workflow instance include the task event and the workflow event.
@@ -35,6 +36,10 @@ public class WorkflowEventBus extends AbstractDelayEventBus<AbstractLifecycleEve
 
     private final WorkflowEventBusSummary workflowEventBusSummary = new WorkflowEventBusSummary();
 
+    /**
+     * 提取 {@link WorkflowEventBusFireWorker#fireAllRegisteredEvent()}
+     * @param event
+     */
     public void publish(final AbstractLifecycleEvent event) {
         super.publish(event);
         workflowEventBusSummary.increaseEventCount();

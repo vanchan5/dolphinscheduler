@@ -19,7 +19,9 @@ package org.apache.dolphinscheduler.server.master.engine.workflow.runnable;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+import org.apache.dolphinscheduler.dao.entity.Command;
 import org.apache.dolphinscheduler.dao.entity.WorkflowInstance;
+import org.apache.dolphinscheduler.server.master.engine.command.handler.AbstractCommandHandler;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowPauseLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowStopLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.listener.IWorkflowLifecycleListener;
@@ -39,6 +41,19 @@ public class WorkflowExecutionRunnable implements IWorkflowExecutionRunnable {
     @Getter
     private final List<IWorkflowLifecycleListener> workflowInstanceLifecycleListeners;
 
+    /**
+     * 命令引擎根据Command命令构建 工作流执行可运行构建器 初始化
+     * Command处理器 {@link AbstractCommandHandler#handleCommand(Command)}
+     * 根据不同的commandType选择对应的handler,组装
+     * 1、组装工作流定义
+     * 2、组装项目信息
+     * 3、组装工作流有向无环图
+     * 4、组装工作流实例(子类实现)
+     * 5、组装事件总线
+     * 6、组装任务执行图
+     *
+     * @param workflowExecutionRunnableBuilder
+     */
     public WorkflowExecutionRunnable(WorkflowExecutionRunnableBuilder workflowExecutionRunnableBuilder) {
         this.workflowExecuteContext = workflowExecutionRunnableBuilder.getWorkflowExecuteContextBuilder().build();
         this.workflowInstanceLifecycleListeners = workflowExecuteContext.getWorkflowInstanceLifecycleListeners();

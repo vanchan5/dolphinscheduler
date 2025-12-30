@@ -32,6 +32,8 @@ import org.apache.dolphinscheduler.server.master.config.MasterConfig;
 import org.apache.dolphinscheduler.server.master.config.MasterServerLoadProtection;
 import org.apache.dolphinscheduler.server.master.engine.IWorkflowRepository;
 import org.apache.dolphinscheduler.server.master.engine.WorkflowEventBusCoordinator;
+import org.apache.dolphinscheduler.server.master.engine.WorkflowEventBusFireWorker;
+import org.apache.dolphinscheduler.server.master.engine.command.handler.AbstractCommandHandler;
 import org.apache.dolphinscheduler.server.master.engine.exceptions.CommandDuplicateHandleException;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowStartLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
@@ -163,6 +165,14 @@ public class CommandEngine extends BaseDaemonThread implements AutoCloseable {
 
         workflowRepository.put(workflowExecutionRunnable);
         workflowEventBusCoordinator.registerWorkflowEventBus(workflowExecutionRunnable);
+        /**
+         * 组装事件总线:
+         * {@link WorkflowExecutionRunnableFactory#createWorkflowExecuteRunnable(Command)} ->
+         * {@link AbstractCommandHandler#handleCommand(Command)} ->
+         * 事件入队 -》 事件订阅:
+         * {@link WorkflowEventBusFireWorker#fireAllRegisteredEvent()} -> workflowEventBus.poll()
+         *
+         */
         workflowExecutionRunnable.getWorkflowEventBus()
                 .publish(WorkflowStartLifecycleEvent.of(workflowExecutionRunnable));
         return CompletableFuture.completedFuture(null);
