@@ -33,6 +33,16 @@ public class WorkflowStartLifecycleEventHandler
         extends
             AbstractWorkflowLifecycleEventHandler<WorkflowStartLifecycleEvent> {
 
+    /**
+     * 一个事件,可能有多个状态,start事件可能有
+     * SUBMITTED_SUCCESS -》TaskSubmittedStateAction
+     * DELAY_EXECUTION   -》TaskDelayExecutionStateAction
+     * DISPATCH          -》TaskDispatchStateAction
+     * RUNNING_EXECUTION -》TaskRunningStateAction
+     * @param workflowStateAction
+     * @param workflowExecutionRunnable
+     * @param workflowStartEvent
+     */
     @Override
     public void handle(final IWorkflowStateAction workflowStateAction,
                        final IWorkflowExecutionRunnable workflowExecutionRunnable,

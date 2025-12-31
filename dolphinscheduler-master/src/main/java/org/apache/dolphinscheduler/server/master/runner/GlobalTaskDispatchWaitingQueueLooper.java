@@ -20,13 +20,31 @@ package org.apache.dolphinscheduler.server.master.runner;
 import org.apache.dolphinscheduler.common.thread.BaseDaemonThread;
 import org.apache.dolphinscheduler.dao.entity.TaskInstance;
 import org.apache.dolphinscheduler.plugin.task.api.enums.TaskExecutionStatus;
+import org.apache.dolphinscheduler.server.master.engine.AbstractLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.ILifecycleEventHandler;
+import org.apache.dolphinscheduler.server.master.engine.WorkflowEventBusFireWorker;
+import org.apache.dolphinscheduler.server.master.engine.command.CommandEngine;
+import org.apache.dolphinscheduler.server.master.engine.command.handler.AbstractCommandHandler;
+import org.apache.dolphinscheduler.server.master.engine.graph.WorkflowExecutionGraph;
+import org.apache.dolphinscheduler.server.master.engine.graph.WorkflowGraphTopologyLogicalVisitor;
 import org.apache.dolphinscheduler.server.master.engine.task.client.ITaskExecutorClient;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskDispatchLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskStartLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.TaskDispatchLifecycleEventHandler;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.TaskStartLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.ITaskExecutionRunnable;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import lombok.extern.slf4j.Slf4j;
 
+import org.apache.dolphinscheduler.server.master.engine.task.statemachine.AbstractTaskStateAction;
+import org.apache.dolphinscheduler.server.master.engine.task.statemachine.ITaskStateAction;
+import org.apache.dolphinscheduler.server.master.engine.task.statemachine.TaskSubmittedStateAction;
+import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.handler.WorkflowStartLifecycleEventHandler;
+import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
+import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.AbstractWorkflowStateAction;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -64,6 +82,24 @@ public class GlobalTaskDispatchWaitingQueueLooper extends BaseDaemonThread imple
         }
     }
 
+    /**
+     * 1、globalTaskDispatchWaitingQueue写入来源:
+     * {@link CommandEngine#bootstrapWorkflowExecutionRunnable(IWorkflowExecutionRunnable)}->
+     * {@link WorkflowEventBusFireWorker#doFireSingleEvent(IWorkflowExecutionRunnable, AbstractLifecycleEvent)}->
+     * {@link ILifecycleEventHandler#handle(IWorkflowExecutionRunnable, AbstractLifecycleEvent)}->
+     * {@link AbstractWorkflowStateAction#triggerTasks(IWorkflowExecutionRunnable, List)}->
+     * {@link TaskStartLifecycleEvent#of(ITaskExecutionRunnable)}->
+     * {@link TaskStartLifecycleEventHandler#handle(IWorkflowExecutionRunnable, TaskStartLifecycleEvent)}->
+     * {@link TaskSubmittedStateAction#startEventAction(IWorkflowExecutionRunnable, ITaskExecutionRunnable, TaskStartLifecycleEvent)} ->
+     * {@link AbstractTaskStateAction#tryToDispatchTask(ITaskExecutionRunnable)} ->
+     * {@link } ->
+     * 从CommandEngine获取Command构建可执行工作流,发布WorkflowStartLifecycleEvent,到workflowEventBusCoordinator协调器创建WorkflowEventBusFireWorker
+     * 执行可执行工作流IWorkflowExecutionRunnable,根据AbstractLifecycleEvent类型(Start)选择
+     * {@link WorkflowStartLifecycleEventHandler} 启动工作流处理流程,
+     * globalTaskDispatchWaitingQueue存这个流程的ITaskExecutionRunnable
+     * ITaskExecutionRunnable来源: {@link AbstractCommandHandler#assembleWorkflowExecutionGraph(WorkflowExecuteContext.WorkflowExecuteContextBuilder)}
+     * 子类实现,根据有向无环图DAG解析出来的 {@link WorkflowExecutionGraph}、{@link WorkflowGraphTopologyLogicalVisitor}
+     */
     void doDispatch() {
         final ITaskExecutionRunnable taskExecutionRunnable = globalTaskDispatchWaitingQueue.takeTaskExecuteRunnable();
         final TaskInstance taskInstance = taskExecutionRunnable.getTaskInstance();

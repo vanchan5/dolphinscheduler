@@ -22,6 +22,7 @@ import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.TaskLifec
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskDispatchLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.ITaskExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.task.statemachine.ITaskStateAction;
+import org.apache.dolphinscheduler.server.master.engine.task.statemachine.TaskSubmittedStateAction;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
 
 import lombok.extern.slf4j.Slf4j;
@@ -32,6 +33,13 @@ import org.springframework.stereotype.Component;
 @Component
 public class TaskDispatchLifecycleEventHandler extends AbstractTaskLifecycleEventHandler<TaskDispatchLifecycleEvent> {
 
+    /**
+     *
+     * @param taskStateAction {@link TaskSubmittedStateAction#dispatchEventAction(IWorkflowExecutionRunnable, ITaskExecutionRunnable, TaskDispatchLifecycleEvent)}
+     * @param workflowExecutionRunnable
+     * @param taskExecutionRunnable
+     * @param event
+     */
     @Override
     public void handle(final ITaskStateAction taskStateAction,
                        final IWorkflowExecutionRunnable workflowExecutionRunnable,
