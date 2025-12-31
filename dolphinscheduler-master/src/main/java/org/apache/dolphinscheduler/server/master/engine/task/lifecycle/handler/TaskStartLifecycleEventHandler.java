@@ -34,6 +34,12 @@ import org.springframework.stereotype.Component;
 @Component
 public class TaskStartLifecycleEventHandler extends AbstractTaskLifecycleEventHandler<TaskStartLifecycleEvent> {
 
+    /**
+     * taskStartLifecycleEvent来源:
+     *
+     * @param workflowExecutionRunnable
+     * @param taskStartLifecycleEvent
+     */
     @Override
     public void handle(final IWorkflowExecutionRunnable workflowExecutionRunnable,
                        final TaskStartLifecycleEvent taskStartLifecycleEvent) {
@@ -42,6 +48,9 @@ public class TaskStartLifecycleEventHandler extends AbstractTaskLifecycleEventHa
         // So we need to initialize the task instance here.
         // Otherwise, we cannot find the statemachine by task instance state.
         if (!taskExecutionRunnable.isTaskInstanceInitialized()) {
+            /**
+             * 任务首次启动时通过 TaskStartLifecycleEventHandler 调用 initializeFirstRunTaskInstance() 来创建
+             */
             taskExecutionRunnable.initializeFirstRunTaskInstance();
         }
         taskTimeoutMonitor(taskExecutionRunnable);

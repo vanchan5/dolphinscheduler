@@ -35,9 +35,16 @@ import org.apache.dolphinscheduler.server.master.engine.WorkflowEventBusCoordina
 import org.apache.dolphinscheduler.server.master.engine.WorkflowEventBusFireWorker;
 import org.apache.dolphinscheduler.server.master.engine.command.handler.AbstractCommandHandler;
 import org.apache.dolphinscheduler.server.master.engine.exceptions.CommandDuplicateHandleException;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.AbstractTaskLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.AbstractTaskLifecycleEventHandler;
+import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.AbstractWorkflowLifecycleLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowStartLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.handler.AbstractWorkflowLifecycleEventHandler;
+import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.handler.WorkflowStartLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
+import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.WorkflowExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.WorkflowExecutionRunnableFactory;
+import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.IWorkflowStateAction;
 import org.apache.dolphinscheduler.server.master.metrics.MasterServerMetrics;
 import org.apache.dolphinscheduler.service.command.CommandService;
 
@@ -171,6 +178,18 @@ public class CommandEngine extends BaseDaemonThread implements AutoCloseable {
          * {@link AbstractCommandHandler#handleCommand(Command)} ->
          * 事件入队 -》 事件订阅:
          * {@link WorkflowEventBusFireWorker#fireAllRegisteredEvent()} -> workflowEventBus.poll()
+         *
+         * 发布WorkflowStartLifecycleEvent,触发{@link WorkflowStartLifecycleEventHandler}处理器
+         *
+         * 其他{@link AbstractWorkflowLifecycleLifecycleEvent} 在其他地方触发,比如
+         * 暂停 {@link WorkflowExecutionRunnable#pause()}
+         *
+         * 触发处理流程
+         * {@link AbstractWorkflowLifecycleLifecycleEvent} ->
+         * {@link AbstractWorkflowLifecycleEventHandler} ->
+         * {@link IWorkflowStateAction} ->
+         * {@link AbstractTaskLifecycleEvent} ->
+         * {@link AbstractTaskLifecycleEventHandler}
          *
          */
         workflowExecutionRunnable.getWorkflowEventBus()

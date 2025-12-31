@@ -17,11 +17,15 @@
 
 package org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.handler;
 
+import org.apache.dolphinscheduler.common.enums.WorkflowExecutionStatus;
 import org.apache.dolphinscheduler.server.master.engine.ILifecycleEventHandler;
+import org.apache.dolphinscheduler.server.master.engine.command.ICommandHandler;
+import org.apache.dolphinscheduler.server.master.engine.command.handler.WorkflowFailoverCommandHandler;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.AbstractWorkflowLifecycleLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.listener.IWorkflowLifecycleListener;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.IWorkflowStateAction;
+import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.WorkflowRunningStateAction;
 import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.WorkflowStateActionFactory;
 
 import org.apache.commons.collections4.CollectionUtils;
@@ -40,6 +44,16 @@ public abstract class AbstractWorkflowLifecycleEventHandler<T extends AbstractWo
     @Autowired
     private WorkflowStateActionFactory workflowStateActionFactory;
 
+    /**
+     *
+     * AbstractWorkflowLifecycleEventHandler与IWorkflowStateAction不是一对一关系,可能是一对多关系
+     * 因为{@link WorkflowFailoverCommandHandler} 组装工作流实例的时候
+     * 状态从参数获取（可能是任意状态） {@link WorkflowExecutionStatus},
+     * 其他的{@link ICommandHandler} 都是RUNNING_EXECUTION -> {@link WorkflowRunningStateAction}
+     *
+     * @param workflowExecutionRunnable
+     * @param event
+     */
     @Override
     public void handle(final IWorkflowExecutionRunnable workflowExecutionRunnable, final T event) {
         final IWorkflowStateAction action = workflowStateActionFactory.getAction(workflowExecutionRunnable.getState());

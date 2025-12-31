@@ -116,6 +116,9 @@ public class WorkflowEventBusFireWorker {
     private void doFireSingleWorkflowEventBus(final IWorkflowExecutionRunnable workflowExecutionRunnable) {
         final WorkflowEventBus workflowEventBus = workflowExecutionRunnable.getWorkflowEventBus();
         while (!workflowEventBus.isEmpty()) {
+            /**
+             * 发布的地方: {@link CommandEngine#bootstrapWorkflowExecutionRunnable(IWorkflowExecutionRunnable)}
+             */
             Optional<AbstractLifecycleEvent> eventOptional = workflowEventBus.poll();
             if (!eventOptional.isPresent()) {
                 return;

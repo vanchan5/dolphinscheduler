@@ -18,6 +18,7 @@
 package org.apache.dolphinscheduler.server.master.engine.command.handler;
 
 import org.apache.dolphinscheduler.common.enums.CommandType;
+import org.apache.dolphinscheduler.common.enums.WorkflowExecutionStatus;
 import org.apache.dolphinscheduler.common.utils.JSONUtils;
 import org.apache.dolphinscheduler.dao.entity.Command;
 import org.apache.dolphinscheduler.dao.entity.TaskInstance;
@@ -70,6 +71,8 @@ public class WorkflowFailoverCommandHandler extends AbstractCommandHandler {
      *     <li>end time</li>
      *     <li>run times</li>
      * </ul>
+     *
+     * 状态从参数获取（可能是任意状态） {@link WorkflowExecutionStatus}
      */
     @Override
     protected void assembleWorkflowInstance(

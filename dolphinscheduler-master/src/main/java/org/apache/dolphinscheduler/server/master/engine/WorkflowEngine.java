@@ -17,9 +17,19 @@
 
 package org.apache.dolphinscheduler.server.master.engine;
 
+import org.apache.dolphinscheduler.dao.entity.TaskInstance;
+import org.apache.dolphinscheduler.plugin.task.api.enums.TaskExecutionStatus;
 import org.apache.dolphinscheduler.server.master.engine.command.CommandEngine;
 import org.apache.dolphinscheduler.server.master.engine.executor.LogicTaskEngineDelegator;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.AbstractTaskLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskStartLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.AbstractTaskLifecycleEventHandler;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.TaskStartLifecycleEventHandler;
+import org.apache.dolphinscheduler.server.master.engine.task.runnable.ITaskExecutionRunnable;
+import org.apache.dolphinscheduler.server.master.engine.task.statemachine.ITaskStateAction;
+import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.AbstractWorkflowLifecycleLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowStartLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.handler.AbstractWorkflowLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.handler.WorkflowStartLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.IWorkflowStateAction;
@@ -118,6 +128,21 @@ public class WorkflowEngine implements AutoCloseable {
          *          |                        |                              |     [定时任务循环]         |
          *          |                        |                              |<--fireAllRegisteredEvent--|
          *          |                        |                              |                          |--处理事件
+         *
+         * 事件处理流程:
+         * {@link AbstractWorkflowLifecycleLifecycleEvent} ->
+         * {@link AbstractWorkflowLifecycleEventHandler} ->
+         * {@link IWorkflowStateAction} ->
+         * {@link AbstractTaskLifecycleEvent} -> {@link TaskStartLifecycleEvent} ->
+         * {@link AbstractTaskLifecycleEventHandler} -> {@link TaskStartLifecycleEventHandler} ->
+         * 最后触发任务实例开始事件
+         *
+         * 任务处理逻辑
+         * {@link ITaskExecutionRunnable#getTaskInstance() } -> {@link TaskInstance#getState()} ->
+         * {@link TaskExecutionStatus} ->
+         * {@link ITaskStateAction} ->  {@link }
+         *
+         *
          */
         workflowEventBusCoordinator.start();
 

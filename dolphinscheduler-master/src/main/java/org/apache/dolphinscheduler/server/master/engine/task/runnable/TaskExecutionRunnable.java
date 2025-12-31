@@ -26,6 +26,7 @@ import org.apache.dolphinscheduler.dao.entity.TaskInstance;
 import org.apache.dolphinscheduler.dao.entity.WorkflowDefinition;
 import org.apache.dolphinscheduler.dao.entity.WorkflowInstance;
 import org.apache.dolphinscheduler.plugin.task.api.TaskExecutionContext;
+import org.apache.dolphinscheduler.plugin.task.api.enums.TaskExecutionStatus;
 import org.apache.dolphinscheduler.server.master.engine.WorkflowEventBus;
 import org.apache.dolphinscheduler.server.master.engine.graph.IWorkflowExecutionGraph;
 import org.apache.dolphinscheduler.server.master.engine.task.client.ITaskExecutorClient;
@@ -82,6 +83,10 @@ public class TaskExecutionRunnable implements ITaskExecutionRunnable {
         return taskInstance != null;
     }
 
+    /**
+     * 如果 taskInstance 为 null，会在任务首次启动时通过 TaskStartLifecycleEventHandler 调用 initializeFirstRunTaskInstance() 来创建。
+     * taskInstance状态为: {@link TaskExecutionStatus#SUBMITTED_SUCCESS}
+     */
     @Override
     public void initializeFirstRunTaskInstance() {
         checkState(!isTaskInstanceInitialized(),

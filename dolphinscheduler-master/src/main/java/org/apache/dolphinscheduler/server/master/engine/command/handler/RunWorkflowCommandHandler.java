@@ -32,8 +32,10 @@ import org.apache.dolphinscheduler.server.master.config.MasterConfig;
 import org.apache.dolphinscheduler.server.master.engine.graph.IWorkflowGraph;
 import org.apache.dolphinscheduler.server.master.engine.graph.WorkflowExecutionGraph;
 import org.apache.dolphinscheduler.server.master.engine.graph.WorkflowGraphTopologyLogicalVisitor;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.TaskStartLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.TaskExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.TaskExecutionRunnableBuilder;
+import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.WorkflowRunningStateAction;
 import org.apache.dolphinscheduler.server.master.runner.WorkflowExecuteContext.WorkflowExecuteContextBuilder;
 import org.apache.dolphinscheduler.service.expand.CuringParamsService;
 
@@ -88,6 +90,20 @@ public class RunWorkflowCommandHandler extends AbstractCommandHandler {
         workflowExecuteContextBuilder.setWorkflowInstance(workflowInstance);
     }
 
+    /***
+     * RunWorkflowCommandHandler（START_PROCESS）：启动新的工作流，任务实例尚未创建，此时设置 taskInstance 没有意义。
+     *
+     * {@link }执行{@link WorkflowRunningStateAction}
+     *
+     * 任务执行相关: {@link TaskStartLifecycleEventHandler}
+     * {@link TaskExecutionRunnableBuilder.TaskExecutionRunnableBuilderBuilder#workflowExecutionGraph}
+     *
+     * 避免不必要的数据库写入
+     * 只在真正需要执行时才创建任务实例
+     * 区分新工作流启动与容错恢复的不同场景
+     *
+     * @param workflowExecuteContextBuilder
+     */
     @Override
     protected void assembleWorkflowExecutionGraph(final WorkflowExecuteContextBuilder workflowExecuteContextBuilder) {
         final IWorkflowGraph workflowGraph = workflowExecuteContextBuilder.getWorkflowGraph();
@@ -104,6 +120,7 @@ public class RunWorkflowCommandHandler extends AbstractCommandHandler {
                             .workflowEventBus(workflowExecuteContextBuilder.getWorkflowEventBus())
                             .applicationContext(applicationContext)
                             .build();
+            // 添加任务节点 TaskExecutionRunnable
             workflowExecutionGraph.addNode(new TaskExecutionRunnable(taskExecutionRunnableBuilder));
             workflowExecutionGraph.addEdge(task, successors);
         };

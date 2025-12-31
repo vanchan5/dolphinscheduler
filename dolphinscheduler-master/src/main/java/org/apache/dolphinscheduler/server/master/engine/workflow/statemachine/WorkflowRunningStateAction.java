@@ -19,6 +19,7 @@ package org.apache.dolphinscheduler.server.master.engine.workflow.statemachine;
 
 import org.apache.dolphinscheduler.common.enums.WorkflowExecutionStatus;
 import org.apache.dolphinscheduler.server.master.engine.WorkflowEventBus;
+import org.apache.dolphinscheduler.server.master.engine.command.handler.AbstractCommandHandler;
 import org.apache.dolphinscheduler.server.master.engine.graph.IWorkflowExecutionGraph;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowFailedLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowFinalizeLifecycleEvent;
@@ -33,12 +34,18 @@ import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkf
 
 import lombok.extern.slf4j.Slf4j;
 
+import org.apache.dolphinscheduler.server.master.runner.WorkflowExecuteContext;
 import org.springframework.stereotype.Component;
 
 @Slf4j
 @Component
 public class WorkflowRunningStateAction extends AbstractWorkflowStateAction {
 
+    /**
+     * 1、workflowExecutionGraph组装: {@link AbstractCommandHandler#assembleWorkflowExecutionGraph(WorkflowExecuteContext.WorkflowExecuteContextBuilder)}
+     * @param workflowExecutionRunnable
+     * @param workflowStartEvent
+     */
     @Override
     public void startEventAction(final IWorkflowExecutionRunnable workflowExecutionRunnable,
                                  final WorkflowStartLifecycleEvent workflowStartEvent) {
