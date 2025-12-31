@@ -22,11 +22,13 @@ import org.apache.dolphinscheduler.plugin.task.api.enums.TaskExecutionStatus;
 import org.apache.dolphinscheduler.server.master.engine.command.CommandEngine;
 import org.apache.dolphinscheduler.server.master.engine.executor.LogicTaskEngineDelegator;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.AbstractTaskLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskDispatchLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskStartLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.AbstractTaskLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.TaskStartLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.ITaskExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.task.statemachine.ITaskStateAction;
+import org.apache.dolphinscheduler.server.master.engine.task.statemachine.TaskSubmittedStateAction;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.AbstractWorkflowLifecycleLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowStartLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.handler.AbstractWorkflowLifecycleEventHandler;
@@ -266,7 +268,9 @@ public class WorkflowEngine implements AutoCloseable {
          *    - 如果分发失败，将任务重新放回队列（带延迟，延迟时间递增，最多 60 秒）
          *
          * 【任务分发机制】
-         * - 任务来源：工作流执行过程中，当任务满足执行条件时，会被放入 GlobalTaskDispatchWaitingQueue
+         * - 任务来源：
+         * {@link TaskSubmittedStateAction#dispatchEventAction(IWorkflowExecutionRunnable, ITaskExecutionRunnable, TaskDispatchLifecycleEvent)} ->
+         * 工作流执行过程中，当任务满足执行条件时，会被放入 GlobalTaskDispatchWaitingQueue
          * - 分发目标：
          *   * PhysicalTaskExecutorClientDelegator: 分发到远程 Worker 节点执行
          *   * LogicTaskExecutorClientDelegator: 分发到本地 LogicTaskExecutor 执行（逻辑任务）
