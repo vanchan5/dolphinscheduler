@@ -92,6 +92,9 @@ public class GlobalTaskDispatchWaitingQueueLooper extends BaseDaemonThread imple
      * {@link TaskStartLifecycleEventHandler#handle(IWorkflowExecutionRunnable, TaskStartLifecycleEvent)}->
      * {@link TaskSubmittedStateAction#startEventAction(IWorkflowExecutionRunnable, ITaskExecutionRunnable, TaskStartLifecycleEvent)} ->
      * {@link AbstractTaskStateAction#tryToDispatchTask(ITaskExecutionRunnable)} ->
+     * {@link TaskDispatchLifecycleEvent} ->
+     * {@link TaskDispatchLifecycleEventHandler} ->
+     * {@link TaskSubmittedStateAction#dispatchEventAction(IWorkflowExecutionRunnable, ITaskExecutionRunnable, TaskDispatchLifecycleEvent)} ->
      * {@link } ->
      * 从CommandEngine获取Command构建可执行工作流,发布WorkflowStartLifecycleEvent,到workflowEventBusCoordinator协调器创建WorkflowEventBusFireWorker
      * 执行可执行工作流IWorkflowExecutionRunnable,根据AbstractLifecycleEvent类型(Start)选择
