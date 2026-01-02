@@ -40,6 +40,8 @@ import org.apache.dolphinscheduler.server.master.engine.WorkflowEngine;
 import org.apache.dolphinscheduler.server.master.engine.system.SystemEventBus;
 import org.apache.dolphinscheduler.server.master.engine.system.SystemEventBusFireWorker;
 import org.apache.dolphinscheduler.server.master.engine.system.event.GlobalMasterFailoverEvent;
+import org.apache.dolphinscheduler.server.master.engine.system.event.MasterFailoverEvent;
+import org.apache.dolphinscheduler.server.master.engine.system.event.WorkerFailoverEvent;
 import org.apache.dolphinscheduler.server.master.metrics.MasterServerMetrics;
 import org.apache.dolphinscheduler.server.master.registry.MasterRegistryClient;
 import org.apache.dolphinscheduler.server.master.rpc.MasterRpcServer;
@@ -190,11 +192,24 @@ public class MasterServer implements IStoppable {
          */
         this.clusterStateMonitors.start();
 
+        /**
+         *
+         */
         this.workflowEngine.start();
 
+        // 启动定时器scheduler
         this.schedulerApi.start();
 
+        /**
+         * 在服务器首次启动时调用，扫描整个系统中所有需要故障转移的工作流并执行转移。
+         */
         this.systemEventBus.publish(GlobalMasterFailoverEvent.of(new Date(startupTime)));
+        /**
+         * 持续从系统事件总线中取出事件并触发相应的处理器进行处理,包括
+         * {@link MasterFailoverEvent}
+         * {@link GlobalMasterFailoverEvent}
+         * {@link WorkerFailoverEvent}
+         */
         this.systemEventBusFireWorker.start();
 
         MasterServerMetrics.registerMasterCpuUsageGauge(() -> {
@@ -210,6 +225,9 @@ public class MasterServer implements IStoppable {
             return systemMetrics.getJvmMemoryUsedPercentage();
         });
 
+        /**
+         * 关闭钩子通过检查 ServerLifeCycleManager 的状态来避免重复关闭，确保关闭流程只执行一次。
+         */
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             if (!ServerLifeCycleManager.isStopped()) {
                 close("MasterServer shutdownHook");
