@@ -18,6 +18,7 @@
 package org.apache.dolphinscheduler.server.worker.executor;
 
 import org.apache.dolphinscheduler.plugin.task.api.TaskExecutionContext;
+import org.apache.dolphinscheduler.server.worker.config.WorkerConfig;
 import org.apache.dolphinscheduler.task.executor.ITaskExecutor;
 import org.apache.dolphinscheduler.task.executor.TaskEngine;
 import org.apache.dolphinscheduler.task.executor.eventbus.ITaskExecutorLifecycleEventReporter;
@@ -39,6 +40,26 @@ public class PhysicalTaskEngineDelegator implements AutoCloseable {
 
     private final PhysicalTaskExecutorRepository physicalTaskExecutorRepository;
 
+    /**
+     * 1、存储和管理所有任务执行器实例
+     *  {@link PhysicalTaskExecutorRepository}
+     * 2、任务执行器生命周期事件的监听器
+     *  {@link PhysicalTaskExecutorLifecycleEventListener#PhysicalTaskExecutorLifecycleEventListener(PhysicalTaskExecutorContainerProvider, PhysicalTaskExecutorRepository, PhysicalTaskExecutorLifecycleEventReporter)}
+     * 3、负责提供任务执行器容器实例
+     *  {@link PhysicalTaskExecutorContainerProvider#PhysicalTaskExecutorContainerProvider(WorkerConfig)}
+     *  4、事件总线协调器，负责定期轮询并处理任务执行器的生命周期事件
+     *  {@link PhysicalTaskExecutorEventBusCoordinator#PhysicalTaskExecutorEventBusCoordinator(PhysicalTaskExecutorRepository, PhysicalTaskExecutorLifecycleEventListener)}
+     *  5、负责创建 `TaskEngine` 实例
+     *  {@link PhysicalTaskEngineFactory#createTaskEngine()}
+     *  6、任务引擎的委托器，在构造函数中创建 `TaskEngine` 实例
+     *  {@link PhysicalTaskEngineDelegator#PhysicalTaskEngineDelegator(PhysicalTaskEngineFactory, PhysicalTaskExecutorFactory, PhysicalTaskExecutorRepository, PhysicalTaskExecutorLifecycleEventReporter)}
+     *  7、日志路径设置
+     *  {@link PhysicalTaskExecutorFactory#assemblyTaskLogPath(TaskExecutionContext)}
+     * @param physicalTaskEngineFactory
+     * @param physicalTaskExecutorFactory
+     * @param physicalTaskExecutorRepository
+     * @param physicalTaskExecutorEventReporter
+     */
     public PhysicalTaskEngineDelegator(final PhysicalTaskEngineFactory physicalTaskEngineFactory,
                                        final PhysicalTaskExecutorFactory physicalTaskExecutorFactory,
                                        final PhysicalTaskExecutorRepository physicalTaskExecutorRepository,

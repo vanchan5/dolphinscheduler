@@ -59,6 +59,7 @@ public class PhysicalTaskExecutor extends AbstractTaskExecutor {
 
     @Override
     protected void initializeTaskPlugin() {
+        // 获取具体的任务类型
         this.physicalTask = physicalTaskPluginFactory.createPhysicalTask(this);
         log.info("Initialized physicalTask: {} successfully", taskExecutionContext.getTaskType());
 

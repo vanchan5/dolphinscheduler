@@ -76,6 +76,7 @@ public abstract class AbstractTaskExecutorContainer implements ITaskExecutorCont
                     "The taskExecutor: " + taskExecutor.getId() + " is not registered to any worker");
         }
         final TaskExecutorWorker taskExecutorWorker = taskExecutorWorkers.getWorkerById(workerId);
+        //任务执行器触发任务执行
         taskExecutorWorker.fireTaskExecutor(taskExecutor);
     }
 

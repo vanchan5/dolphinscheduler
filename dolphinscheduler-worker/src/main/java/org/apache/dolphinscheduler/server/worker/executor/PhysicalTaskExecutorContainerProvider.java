@@ -35,6 +35,7 @@ public class PhysicalTaskExecutorContainerProvider implements ITaskExecutorConta
                 .containerName("exclusive-task-executor-container")
                 .taskExecutorThreadPoolSize(workerConfig.getPhysicalTaskConfig().getTaskExecutorThreadSize())
                 .build();
+        // 独占线程容器
         this.taskExecutorContainer = new ExclusiveThreadTaskExecutorContainer(containerConfig);
     }
 

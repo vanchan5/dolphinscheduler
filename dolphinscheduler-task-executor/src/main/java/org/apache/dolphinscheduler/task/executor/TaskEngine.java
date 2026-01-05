@@ -60,6 +60,7 @@ public class TaskEngine implements ITaskEngine {
             executorContainer.dispatch(taskExecutor);
             taskExecutorRepository.put(taskExecutor);
             taskExecutor.getTaskExecutorEventBus().publish(TaskExecutorDispatchedLifecycleEvent.of(taskExecutor));
+            // 执行容器执行任务
             executorContainer.start(taskExecutor);
         }
     }

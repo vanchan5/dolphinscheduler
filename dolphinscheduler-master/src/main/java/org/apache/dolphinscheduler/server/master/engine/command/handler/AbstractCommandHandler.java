@@ -88,7 +88,7 @@ public abstract class AbstractCommandHandler implements ICommandHandler {
         assembleWorkflowInstanceLifecycleListeners(workflowExecuteContextBuilder);
         //组装事件总线
         assembleWorkflowEventBus(workflowExecuteContextBuilder);
-        //组装任务执行图
+        /**组装任务执行图,生成{@link ITaskExecutionRunnable}*/
         assembleWorkflowExecutionGraph(workflowExecuteContextBuilder);
 
         // 创建workflowExecutionRunnable
