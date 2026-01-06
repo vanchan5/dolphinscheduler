@@ -20,6 +20,7 @@ package org.apache.dolphinscheduler.server.master.engine.command;
 import static java.util.concurrent.CompletableFuture.supplyAsync;
 
 import org.apache.dolphinscheduler.common.constants.Constants;
+import org.apache.dolphinscheduler.common.enums.CommandType;
 import org.apache.dolphinscheduler.common.enums.WorkflowExecutionStatus;
 import org.apache.dolphinscheduler.common.thread.BaseDaemonThread;
 import org.apache.dolphinscheduler.common.thread.ThreadUtils;
@@ -34,6 +35,7 @@ import org.apache.dolphinscheduler.server.master.engine.IWorkflowRepository;
 import org.apache.dolphinscheduler.server.master.engine.WorkflowEventBusCoordinator;
 import org.apache.dolphinscheduler.server.master.engine.WorkflowEventBusFireWorker;
 import org.apache.dolphinscheduler.server.master.engine.command.handler.AbstractCommandHandler;
+import org.apache.dolphinscheduler.server.master.engine.command.handler.RunWorkflowCommandHandler;
 import org.apache.dolphinscheduler.server.master.engine.exceptions.CommandDuplicateHandleException;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.AbstractTaskLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.AbstractTaskLifecycleEventHandler;
@@ -45,7 +47,9 @@ import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkf
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.WorkflowExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.WorkflowExecutionRunnableFactory;
 import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.IWorkflowStateAction;
+import org.apache.dolphinscheduler.server.master.engine.workflow.trigger.AbstractWorkflowTrigger;
 import org.apache.dolphinscheduler.server.master.metrics.MasterServerMetrics;
+import org.apache.dolphinscheduler.server.master.runner.WorkflowExecuteContext;
 import org.apache.dolphinscheduler.service.command.CommandService;
 
 import org.apache.commons.collections4.CollectionUtils;
@@ -127,6 +131,17 @@ public class CommandEngine extends BaseDaemonThread implements AutoCloseable {
                     Thread.sleep(Constants.SLEEP_TIME_MILLIS);
                     continue;
                 }
+                /**
+                 * command初始状态：
+                 *      {@link CommandType.START_PROCESS} -> {@link RunWorkflowCommandHandler#assembleWorkflowInstance(WorkflowExecuteContext.WorkflowExecuteContextBuilder)}
+                 *      {@link CommandType.SCHEDULER} 等等
+                 * workflowInstance初始状态：
+                 *      {@link WorkflowExecutionStatus.SUBMITTED_SUCCESS} ->
+                 *      handler构建完后 {@link RunWorkflowCommandHandler#assembleWorkflowInstance(WorkflowExecuteContext.WorkflowExecuteContextBuilder)}
+                 *      更新状态为 {@link WorkflowExecutionStatus.RUNNING_EXECUTION}
+                 *
+                 * command和workflowInstance来源：{@link AbstractWorkflowTrigger#constructTriggerCommand(Object, WorkflowInstance)}
+                 */
                 List<Command> commands = commandFetcher.fetchCommands();
                 if (CollectionUtils.isEmpty(commands)) {
                     // indicate that no command ,sleep for 1s

@@ -32,9 +32,12 @@ import org.apache.dolphinscheduler.server.master.config.MasterConfig;
 import org.apache.dolphinscheduler.server.master.engine.graph.IWorkflowGraph;
 import org.apache.dolphinscheduler.server.master.engine.graph.WorkflowExecutionGraph;
 import org.apache.dolphinscheduler.server.master.engine.graph.WorkflowGraphTopologyLogicalVisitor;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskStartLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.TaskStartLifecycleEventHandler;
+import org.apache.dolphinscheduler.server.master.engine.task.runnable.ITaskExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.TaskExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.TaskExecutionRunnableBuilder;
+import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.WorkflowRunningStateAction;
 import org.apache.dolphinscheduler.server.master.runner.WorkflowExecuteContext.WorkflowExecuteContextBuilder;
 import org.apache.dolphinscheduler.service.expand.CuringParamsService;
@@ -92,6 +95,9 @@ public class RunWorkflowCommandHandler extends AbstractCommandHandler {
 
     /***
      * RunWorkflowCommandHandler（START_PROCESS）：启动新的工作流，任务实例尚未创建，此时设置 taskInstance 没有意义。
+     * 这种START_PROCESS类型的工作流事件触发的，在任务开始事件处理中会初始化任务实例
+     * {@link TaskStartLifecycleEventHandler#handle(IWorkflowExecutionRunnable, TaskStartLifecycleEvent)}
+     * {@link TaskExecutionRunnable#initializeFirstRunTaskInstance()}
      *
      * {@link }执行{@link WorkflowRunningStateAction}
      *

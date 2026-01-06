@@ -18,17 +18,25 @@
 package org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler;
 
 import org.apache.dolphinscheduler.dao.entity.TaskDefinition;
+import org.apache.dolphinscheduler.plugin.task.api.enums.TaskExecutionStatus;
 import org.apache.dolphinscheduler.server.master.engine.ILifecycleEventType;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.TaskLifecycleEventType;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskStartLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskTimeoutLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.ITaskExecutionRunnable;
+import org.apache.dolphinscheduler.server.master.engine.task.runnable.TaskExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.task.statemachine.ITaskStateAction;
+import org.apache.dolphinscheduler.server.master.engine.task.statemachine.TaskSubmittedStateAction;
+import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowStartLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
 
 import lombok.extern.slf4j.Slf4j;
 
+import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.AbstractWorkflowStateAction;
+import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.WorkflowRunningStateAction;
 import org.springframework.stereotype.Component;
+
+import java.util.List;
 
 @Slf4j
 @Component
@@ -36,6 +44,8 @@ public class TaskStartLifecycleEventHandler extends AbstractTaskLifecycleEventHa
 
     /**
      * taskStartLifecycleEvent来源:
+     * 1、{@link WorkflowRunningStateAction#startEventAction(IWorkflowExecutionRunnable, WorkflowStartLifecycleEvent)} ->
+     *    {@link AbstractWorkflowStateAction#triggerTasks(IWorkflowExecutionRunnable, List)}
      *
      * @param workflowExecutionRunnable
      * @param taskStartLifecycleEvent
@@ -50,6 +60,10 @@ public class TaskStartLifecycleEventHandler extends AbstractTaskLifecycleEventHa
         if (!taskExecutionRunnable.isTaskInstanceInitialized()) {
             /**
              * 任务首次启动时通过 TaskStartLifecycleEventHandler 调用 initializeFirstRunTaskInstance() 来创建
+             * {@link TaskExecutionRunnable#initializeFirstRunTaskInstance()}
+             * 此时任务执行状态为 {@link TaskExecutionStatus.SUBMITTED_SUCCESS}
+             *
+             * 对应的ITaskStateAction 为 {@link TaskSubmittedStateAction#startEventAction(IWorkflowExecutionRunnable, ITaskExecutionRunnable, TaskStartLifecycleEvent)}
              */
             taskExecutionRunnable.initializeFirstRunTaskInstance();
         }

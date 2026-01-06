@@ -33,6 +33,7 @@ import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.Tas
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskRunningLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskStartLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskSuccessLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.TaskStartLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.ITaskExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.runner.GlobalTaskDispatchWaitingQueue;
@@ -55,6 +56,14 @@ public class TaskSubmittedStateAction extends AbstractTaskStateAction {
     @Autowired
     private TaskInstanceDao taskInstanceDao;
 
+    /**
+     * 触发点：
+     * 1、{@link TaskStartLifecycleEventHandler#handle(IWorkflowExecutionRunnable, TaskStartLifecycleEvent)}
+     *
+     * @param workflowExecutionRunnable
+     * @param taskExecutionRunnable
+     * @param taskStartEvent
+     */
     @Override
     public void startEventAction(final IWorkflowExecutionRunnable workflowExecutionRunnable,
                                  final ITaskExecutionRunnable taskExecutionRunnable,
@@ -71,6 +80,7 @@ public class TaskSubmittedStateAction extends AbstractTaskStateAction {
             return;
         }
 
+        //
         tryToDispatchTask(taskExecutionRunnable);
     }
 

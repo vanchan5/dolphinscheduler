@@ -17,14 +17,23 @@
 
 package org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.handler;
 
+import org.apache.dolphinscheduler.common.enums.CommandType;
+import org.apache.dolphinscheduler.common.enums.WorkflowExecutionStatus;
+import org.apache.dolphinscheduler.dao.entity.Command;
 import org.apache.dolphinscheduler.server.master.engine.ILifecycleEventType;
+import org.apache.dolphinscheduler.server.master.engine.command.CommandEngine;
+import org.apache.dolphinscheduler.server.master.engine.command.handler.AbstractCommandHandler;
+import org.apache.dolphinscheduler.server.master.engine.command.handler.WorkflowFailoverCommandHandler;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.WorkflowLifecycleEventType;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowStartLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
+import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.WorkflowExecutionRunnableFactory;
 import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.IWorkflowStateAction;
 
 import lombok.extern.slf4j.Slf4j;
 
+import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.WorkflowRunningStateAction;
+import org.apache.dolphinscheduler.server.master.runner.WorkflowExecuteContext;
 import org.springframework.stereotype.Component;
 
 @Slf4j
@@ -34,11 +43,15 @@ public class WorkflowStartLifecycleEventHandler
             AbstractWorkflowLifecycleEventHandler<WorkflowStartLifecycleEvent> {
 
     /**
-     * 一个事件,可能有多个状态,start事件可能有
-     * SUBMITTED_SUCCESS -》TaskSubmittedStateAction
-     * DELAY_EXECUTION   -》TaskDelayExecutionStateAction
-     * DISPATCH          -》TaskDispatchStateAction
-     * RUNNING_EXECUTION -》TaskRunningStateAction
+     * 1、工作流事件以及工作流执行状态
+     * 工作流开始事件{@link WorkflowStartLifecycleEvent#of(IWorkflowExecutionRunnable)} 只有一个触发点 {@link CommandEngine#bootstrapWorkflowExecutionRunnable(IWorkflowExecutionRunnable)}
+     * 此时经过组装{@link WorkflowExecutionRunnableFactory#createWorkflowExecuteRunnable(Command)}
+     *          {@link AbstractCommandHandler#assembleWorkflowInstance(WorkflowExecuteContext.WorkflowExecuteContextBuilder)}
+     * 后大多数状态为 {@link WorkflowExecutionStatus#RUNNING_EXECUTION} 除了{@link CommandType#RECOVER_TOLERANCE_FAULT_PROCESS}类型的Command{@link WorkflowFailoverCommandHandler}的状态不确认，可能对应全部的{@link WorkflowExecutionStatus}
+     *
+     * 按正常状态是 {@link WorkflowExecutionStatus#RUNNING_EXECUTION}，对应的action为{@link WorkflowRunningStateAction#startEventAction(IWorkflowExecutionRunnable, WorkflowStartLifecycleEvent)}
+     *
+     * 2、
      * @param workflowStateAction
      * @param workflowExecutionRunnable
      * @param workflowStartEvent

@@ -20,6 +20,7 @@ package org.apache.dolphinscheduler.server.master.engine.workflow.statemachine;
 import org.apache.dolphinscheduler.common.enums.WorkflowExecutionStatus;
 import org.apache.dolphinscheduler.server.master.engine.WorkflowEventBus;
 import org.apache.dolphinscheduler.server.master.engine.command.handler.AbstractCommandHandler;
+import org.apache.dolphinscheduler.server.master.engine.command.handler.RunWorkflowCommandHandler;
 import org.apache.dolphinscheduler.server.master.engine.graph.IWorkflowExecutionGraph;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowFailedLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowFinalizeLifecycleEvent;
@@ -30,6 +31,7 @@ import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowStoppedLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowSucceedLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowTopologyLogicalTransitionWithTaskFinishLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.handler.WorkflowStartLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
 
 import lombok.extern.slf4j.Slf4j;
@@ -43,6 +45,9 @@ public class WorkflowRunningStateAction extends AbstractWorkflowStateAction {
 
     /**
      * 1、workflowExecutionGraph组装: {@link AbstractCommandHandler#assembleWorkflowExecutionGraph(WorkflowExecuteContext.WorkflowExecuteContextBuilder)}
+     * 2、工作流开始事件组装对应的是 {@link RunWorkflowCommandHandler#assembleWorkflowExecutionGraph(WorkflowExecuteContext.WorkflowExecuteContextBuilder)}
+     *
+     * 触发点：{@link WorkflowStartLifecycleEventHandler#handle(IWorkflowStateAction, IWorkflowExecutionRunnable, WorkflowStartLifecycleEvent)}
      * @param workflowExecutionRunnable
      * @param workflowStartEvent
      */
