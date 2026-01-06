@@ -28,6 +28,10 @@ import org.apache.dolphinscheduler.task.executor.exceptions.TaskExecutorRuntimeE
 import org.apache.dolphinscheduler.task.executor.log.TaskExecutorMDCUtils;
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.dolphinscheduler.task.executor.worker.TaskExecutorWorker;
+import org.bouncycastle.jcajce.provider.digest.MD5;
+
+import java.util.Base64;
 
 @Slf4j
 public class TaskEngine implements ITaskEngine {
@@ -53,14 +57,31 @@ public class TaskEngine implements ITaskEngine {
         log.info("{} started", engineName);
     }
 
+    /**
+     * 任务提交入口
+     *
+     * @param taskExecutor the task executor to be submitted
+     * @throws TaskExecutorRuntimeException
+     */
     @Override
     public void submitTask(final ITaskExecutor taskExecutor) throws TaskExecutorRuntimeException {
         try (final TaskExecutorMDCUtils.MDCAutoClosable ignore = TaskExecutorMDCUtils.logWithMDC(taskExecutor)) {
+            /**
+             * worker 获取的是独占类型线程
+             * master 获取的是共享类型线程
+             */
             final ITaskExecutorContainer executorContainer = taskExecutorContainerDelegator.getExecutorContainer();
+            // 注册taskExecutor
             executorContainer.dispatch(taskExecutor);
+            // 放入共享Map
             taskExecutorRepository.put(taskExecutor);
+            // 发布任务已分发事件
             taskExecutor.getTaskExecutorEventBus().publish(TaskExecutorDispatchedLifecycleEvent.of(taskExecutor));
-            // 执行容器执行任务
+            /**
+             * 执行容器执行任务,唤醒taskExecutorWorker线程执行
+             * {@link TaskExecutorWorker#fireTaskExecutor(ITaskExecutor)} ->
+             * {@link TaskExecutorWorker#start()}
+             */
             executorContainer.start(taskExecutor);
         }
     }
@@ -93,4 +114,7 @@ public class TaskEngine implements ITaskEngine {
         return taskExecutorRepository.get(taskId).orElseThrow(() -> new TaskExecutorNotFoundException(taskId));
     }
 
+    public static void main(String[] args) {
+        log.info(new String(Base64.getDecoder().decode("MTIzNEBRd2Vy")));
+    }
 }

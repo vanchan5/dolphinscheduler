@@ -44,6 +44,15 @@ public class PhysicalTaskExecutorOperatorImpl implements IPhysicalTaskExecutorOp
     @Autowired
     private PhysicalTaskEngineDelegator physicalTaskEngineDelegator;
 
+    /**
+     * master调用worker执行任务
+     *
+     *    {@link org.apache.dolphinscheduler.server.master.engine.task.client.PhysicalTaskExecutorClientDelegator#dispatch(org.apache.dolphinscheduler.server.master.engine.task.runnable.ITaskExecutionRunnable)}
+     * <- {@link org.apache.dolphinscheduler.server.master.engine.task.client.TaskExecutorClient#dispatch(org.apache.dolphinscheduler.server.master.engine.task.runnable.ITaskExecutionRunnable)}
+     * <- {@link org.apache.dolphinscheduler.server.master.runner.GlobalTaskDispatchWaitingQueueLooper#doDispatch()}
+     * @param taskExecutorDispatchRequest
+     * @return
+     */
     @Override
     public TaskExecutorDispatchResponse dispatchTask(final TaskExecutorDispatchRequest taskExecutorDispatchRequest) {
         log.info("Receive TaskExecutorDispatchResponse: {}", taskExecutorDispatchRequest);

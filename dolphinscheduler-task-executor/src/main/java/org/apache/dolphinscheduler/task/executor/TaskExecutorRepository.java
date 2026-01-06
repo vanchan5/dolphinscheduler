@@ -26,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class TaskExecutorRepository implements ITaskExecutorRepository {
 
+    // 这是实际的数据存储，所有实例共享这个 Map
     private final Map<Integer, ITaskExecutor> taskExecutorMap = new ConcurrentHashMap<>();
 
     @Override

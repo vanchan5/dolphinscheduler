@@ -353,7 +353,9 @@ public class TaskExecutorEventBusCoordinator implements ITaskExecutorEventBusCoo
      */
     private void fireTaskExecutorEventBus() {
         try {
-
+            /**
+             * taskExecutorRepository
+             */
             final Collection<ITaskExecutor> taskExecutors = taskExecutorRepository.getAll();
             if (CollectionUtils.isEmpty(taskExecutors)) {
                 return;

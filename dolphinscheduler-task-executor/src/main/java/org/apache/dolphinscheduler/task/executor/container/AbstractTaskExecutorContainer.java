@@ -53,9 +53,15 @@ public abstract class AbstractTaskExecutorContainer implements ITaskExecutorCont
         startAllThreadTaskExecutorWorker();
     }
 
+    /**
+     * 工作线程类型配置 : {@link org.apache.dolphinscheduler.server.worker.executor.PhysicalTaskExecutorContainerProvider}
+     * 设置是 独占线程
+     * @param taskExecutor
+     */
     @Override
     public void dispatch(final ITaskExecutor taskExecutor) {
         synchronized (this) {
+            //独占线程任务执行者worker
             Optional<TaskExecutorWorker> taskExecutorWorkerCandidate = getTaskExecutorWorkerCandidate(taskExecutor);
             if (!taskExecutorWorkerCandidate.isPresent()) {
                 log.info("All ExclusiveThreadTaskExecutorWorker are busy, cannot submit taskExecutor(id={})",
@@ -76,7 +82,7 @@ public abstract class AbstractTaskExecutorContainer implements ITaskExecutorCont
                     "The taskExecutor: " + taskExecutor.getId() + " is not registered to any worker");
         }
         final TaskExecutorWorker taskExecutorWorker = taskExecutorWorkers.getWorkerById(workerId);
-        //任务执行器触发任务执行
+        // 任务执行器触发任务执行,唤醒线程
         taskExecutorWorker.fireTaskExecutor(taskExecutor);
     }
 

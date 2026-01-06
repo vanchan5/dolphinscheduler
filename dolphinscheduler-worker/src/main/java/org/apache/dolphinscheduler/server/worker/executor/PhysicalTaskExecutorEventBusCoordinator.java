@@ -21,6 +21,11 @@ import org.apache.dolphinscheduler.task.executor.eventbus.TaskExecutorEventBusCo
 
 import org.springframework.stereotype.Component;
 
+
+/**
+ * 由于 Spring 单例模式，
+ * 所有组件注入的都是同一个 `PhysicalTaskExecutorRepository` 实例,因此，所有组件访问的是同一个 `ConcurrentHashMap`
+ */
 @Component
 public class PhysicalTaskExecutorEventBusCoordinator extends TaskExecutorEventBusCoordinator {
 
