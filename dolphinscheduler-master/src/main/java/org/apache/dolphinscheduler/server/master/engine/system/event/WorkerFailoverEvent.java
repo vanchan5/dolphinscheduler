@@ -39,6 +39,14 @@ public class WorkerFailoverEvent extends AbstractSystemEvent {
         this.eventTime = eventTime;
     }
 
+    /**
+     * {@link WorkerFailoverEventHandler}
+     *
+     * @param workerServerMetadata
+     * @param eventTime
+     * @param delayTime
+     * @return
+     */
     public static WorkerFailoverEvent of(final WorkerServerMetadata workerServerMetadata,
                                          final Date eventTime,
                                          final long delayTime) {
