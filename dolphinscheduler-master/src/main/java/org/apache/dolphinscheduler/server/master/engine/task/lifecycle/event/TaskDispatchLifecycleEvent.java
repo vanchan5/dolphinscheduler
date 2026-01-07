@@ -20,6 +20,7 @@ package org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event;
 import org.apache.dolphinscheduler.server.master.engine.ILifecycleEventType;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.AbstractTaskLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.TaskLifecycleEventType;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.TaskDispatchLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.ITaskExecutionRunnable;
 
 import lombok.AllArgsConstructor;
@@ -31,6 +32,12 @@ public class TaskDispatchLifecycleEvent extends AbstractTaskLifecycleEvent {
 
     private final ITaskExecutionRunnable taskExecutionRunnable;
 
+    /**
+     * {@link TaskDispatchLifecycleEventHandler}
+     *
+     * @param taskExecutionRunnable
+     * @return
+     */
     public static TaskDispatchLifecycleEvent of(final ITaskExecutionRunnable taskExecutionRunnable) {
         return new TaskDispatchLifecycleEvent(taskExecutionRunnable);
     }

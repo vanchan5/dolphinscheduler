@@ -377,7 +377,16 @@ public class FailoverCoordinator implements IFailoverCoordinator {
         // 获取需要故障转移的任务列表（提交时间在截止时间之前的任务）
         final List<ITaskExecutionRunnable> needFailoverTasks =
                 getFailoverTaskForWorker(workerAddress, new Date(taskFailoverDeadline));
-        // 对每个任务执行故障转移
+        /**
+         * 对每个任务执行故障转移
+         *
+         * 多个 Master 都会执行 takeOverTaskFromExecutor()
+         * 不会重复处理同一个任务，因为：
+         * 每个 Master 只处理自己内存中的工作流实例
+         * 每个工作流实例只由一个 Master 管理
+         * 任务属于工作流实例，因此任务也只由一个 Master 处理
+         * 这是通过内存隔离实现的并发控制，而不是分布式锁。
+         */
         needFailoverTasks.forEach(taskFailover::failoverTask);
 
         // 在注册中心持久化故障转移状态，记录当前时间
@@ -410,6 +419,14 @@ public class FailoverCoordinator implements IFailoverCoordinator {
      */
     private List<ITaskExecutionRunnable> getFailoverTaskForWorker(final String workerAddress,
                                                                   final Date taskFailoverDeadline) {
+        /**
+         * 1、只从当前 Master 的内存中获取任务（workflowRepository.getAll()）
+         * 2、每个 Master 只处理自己内存中的工作流实例
+         * 3、每个工作流实例只由一个 Master 管理（通过 Command 的唯一性保证）
+         * 4、过滤条件：
+         *    a、host 必须匹配故障的 Worker 地址（第431-432行）
+         *    b、状态必须是 DISPATCH 或 RUNNING_EXECUTION（第435-438行）
+         */
         return workflowRepository.getAll()
                 .stream()
                 // 获取每个工作流的执行图

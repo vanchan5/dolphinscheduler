@@ -26,12 +26,15 @@ import org.apache.dolphinscheduler.dao.entity.TaskInstance;
 import org.apache.dolphinscheduler.dao.entity.WorkflowDefinition;
 import org.apache.dolphinscheduler.dao.entity.WorkflowInstance;
 import org.apache.dolphinscheduler.plugin.task.api.TaskExecutionContext;
+import org.apache.dolphinscheduler.server.master.cluster.ClusterStateMonitors;
 import org.apache.dolphinscheduler.server.master.engine.WorkflowEventBus;
 import org.apache.dolphinscheduler.server.master.engine.graph.IWorkflowExecutionGraph;
+import org.apache.dolphinscheduler.server.master.engine.system.event.WorkerFailoverEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.task.client.ITaskExecutorClient;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskKillLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskPauseLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskStartLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.failover.FailoverCoordinator;
 import org.apache.dolphinscheduler.server.master.runner.TaskExecutionContextFactory;
 
 import javax.annotation.Nullable;
@@ -40,6 +43,8 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.context.ApplicationContext;
+
+import java.util.Date;
 
 /**
  * 任务执行Runnable实现类
@@ -290,14 +295,32 @@ public class TaskExecutionRunnable implements ITaskExecutionRunnable {
     public void failover() {
         // 验证任务实例已初始化，如果未初始化则抛出异常
         checkState(isTaskInstanceInitialized(), "The task instance is not initialized, can't failover.");
-        // 尝试从执行器接管任务（重新分配工作流实例主机）
-        // 如果接管成功，说明任务已被其他Worker接管，无需重建任务实例
+        /**
+         * 这是一个试探性操作，用于确认 Worker 是否真的故障
+         * 尝试从执行器接管任务（重新分配工作流实例主机）
+         * 如果接管成功，说明任务仍在原 Worker 上运行，只是更新了 workflowHost 指向新的 Master，无需重建任务实例
+         */
         if (takeOverTaskFromExecutor()) {
             log.info("Failover task success, the task {} has been taken-over from executor", taskInstance.getName());
             return;
         }
-        // 接管失败，使用FailoverTaskInstanceFactory创建新的故障转移任务实例
-        // 该工厂会基于现有taskInstance创建新的故障转移任务实例，状态重置为SUBMITTED_SUCCESS
+        /**
+         * 接管失败，使用FailoverTaskInstanceFactory创建新的故障转移任务实例
+         * 该工厂会基于现有taskInstance创建新的故障转移任务实例，状态重置为SUBMITTED_SUCCESS
+         *
+         * 并发控制机制: 如何避免多个 Master 重复处理同一任务实例
+         *
+         * 每个 Master 只处理自己内存中的任务，通过内存隔离实现，不是分布式锁
+         * 获取指定 Worker 需要故障转移的任务列表 {@link FailoverCoordinator#getFailoverTaskForWorker(String, Date)}
+         *
+         * 新任务实例的特点：
+         * 1、host 设置为 null（第54行）
+         * 2、状态设置为 SUBMITTED_SUCCESS
+         * 因此：
+         * 新任务实例的 host 是 null，不匹配故障的 Worker 地址，不会被 getFailoverTaskForWorker 选中
+         * 新任务实例的状态是 SUBMITTED_SUCCESS，不是 DISPATCH 或 RUNNING_EXECUTION，也不会被选中
+         * 原任务实例的状态被标记为 NEED_FAULT_TOLERANCE，也不会被选中
+         */
         this.taskInstance = applicationContext.getBean(TaskInstanceFactories.class)
                 .failoverTaskInstanceFactory()
                 .builder()
@@ -391,7 +414,7 @@ public class TaskExecutionRunnable implements ITaskExecutionRunnable {
     }
 
     /**
-     * 从执行器接管任务
+     * 从执行器接管任务,触发{@link ClusterStateMonitors#start()} -> {@link WorkerFailoverEventHandler}
      * <p>
      * 尝试重新分配工作流实例的主机地址，从而从其他执行器接管任务。
      * 这个方法在故障转移时会被调用，如果任务已经被其他Worker接管，则无需重建任务实例。

@@ -179,6 +179,11 @@ public class WorkflowExecutionGraph implements IWorkflowExecutionGraph {
         return new ArrayList<>(totalTaskExecuteRunnableMap.values());
     }
 
+    /**
+     * 是否满足触发条件
+     * @param taskExecutionRunnable
+     * @return
+     */
     @Override
     public boolean isTriggerConditionMet(final ITaskExecutionRunnable taskExecutionRunnable) {
         if (isTaskExecutionRunnableActive(taskExecutionRunnable)

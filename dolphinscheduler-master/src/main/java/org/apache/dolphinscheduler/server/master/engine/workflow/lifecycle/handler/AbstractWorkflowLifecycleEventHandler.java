@@ -20,6 +20,7 @@ package org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.hand
 import org.apache.dolphinscheduler.common.enums.WorkflowExecutionStatus;
 import org.apache.dolphinscheduler.server.master.engine.ILifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.command.ICommandHandler;
+import org.apache.dolphinscheduler.server.master.engine.command.handler.AbstractCommandHandler;
 import org.apache.dolphinscheduler.server.master.engine.command.handler.WorkflowFailoverCommandHandler;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.AbstractWorkflowLifecycleLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.listener.IWorkflowLifecycleListener;
@@ -34,6 +35,7 @@ import java.util.List;
 
 import lombok.extern.slf4j.Slf4j;
 
+import org.apache.dolphinscheduler.server.master.runner.WorkflowExecuteContext;
 import org.springframework.beans.factory.annotation.Autowired;
 
 @Slf4j
@@ -67,6 +69,7 @@ public abstract class AbstractWorkflowLifecycleEventHandler<T extends AbstractWo
                 workflowExecutionRunnable.getName(),
                 event,
                 workflowExecutionRunnable.getState().name());
+        // 目前只处理启动是补数类型的工作流任务(前端手动触发),会按照设置的时间段(,分割)选择串行或者并行处理
         doTriggerWorkflowLifecycleListener(workflowExecutionRunnable, event);
     }
 
@@ -76,8 +79,9 @@ public abstract class AbstractWorkflowLifecycleEventHandler<T extends AbstractWo
                                 final T event);
 
     private void doTriggerWorkflowLifecycleListener(
-                                                    final IWorkflowExecutionRunnable workflowExecutionRunnable,
+            final IWorkflowExecutionRunnable workflowExecutionRunnable,
                                                     final T event) {
+        /**{@link AbstractCommandHandler#assembleWorkflowInstanceLifecycleListeners(WorkflowExecuteContext.WorkflowExecuteContextBuilder)}*/
         final List<IWorkflowLifecycleListener> listeners = workflowExecutionRunnable.getWorkflowLifecycleListeners();
         if (CollectionUtils.isEmpty(listeners)) {
             return;

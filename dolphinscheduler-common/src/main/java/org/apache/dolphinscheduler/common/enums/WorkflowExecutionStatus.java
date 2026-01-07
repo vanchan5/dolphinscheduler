@@ -28,8 +28,19 @@ import com.baomidou.mybatisplus.annotation.EnumValue;
 @Getter
 public enum WorkflowExecutionStatus {
 
+    /**
+     * 用户启动工作流定义:
+     * {@link org.apache.dolphinscheduler.api.service.impl.ExecutorServiceImpl#triggerWorkflowDefinition(org.apache.dolphinscheduler.api.dto.workflow.WorkflowTriggerRequest)}
+     * {@link org.apache.dolphinscheduler.server.master.rpc.WorkflowControlClient#manualTriggerWorkflow(org.apache.dolphinscheduler.extract.master.transportor.workflow.WorkflowManualTriggerRequest)}
+     */
     SUBMITTED_SUCCESS(0, "submitted"),
+    /**
+     * {@link org.apache.dolphinscheduler.server.master.engine.command.handler.AbstractCommandHandler#assembleWorkflowInstance(org.apache.dolphinscheduler.server.master.runner.WorkflowExecuteContext.WorkflowExecuteContextBuilder)}
+     */
     RUNNING_EXECUTION(1, "running"),
+    /**
+     * {@link org.apache.dolphinscheduler.api.service.impl.ExecutorServiceImpl#controlWorkflowInstance(org.apache.dolphinscheduler.dao.entity.User, Integer, org.apache.dolphinscheduler.api.enums.ExecuteType)}
+     */
     READY_PAUSE(2, "ready pause"),
     PAUSE(3, "pause"),
     READY_STOP(4, "ready stop"),

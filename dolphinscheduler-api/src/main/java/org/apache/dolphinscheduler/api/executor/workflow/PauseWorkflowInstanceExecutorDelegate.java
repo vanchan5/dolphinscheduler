@@ -17,7 +17,10 @@
 
 package org.apache.dolphinscheduler.api.executor.workflow;
 
+import org.apache.dolphinscheduler.api.controller.ExecutorController;
+import org.apache.dolphinscheduler.api.enums.ExecuteType;
 import org.apache.dolphinscheduler.api.exceptions.ServiceException;
+import org.apache.dolphinscheduler.api.service.impl.ExecutorServiceImpl;
 import org.apache.dolphinscheduler.common.enums.WorkflowExecutionStatus;
 import org.apache.dolphinscheduler.dao.entity.User;
 import org.apache.dolphinscheduler.dao.entity.WorkflowInstance;
@@ -41,13 +44,47 @@ public class PauseWorkflowInstanceExecutorDelegate
     @Autowired
     private WorkflowInstanceDao workflowInstanceDao;
 
+    /**
+     * 前端触发暂停操作 {@link ExecutorServiceImpl#controlWorkflowInstance(User, Integer, ExecuteType)}
+     *
+     * 状态{@link WorkflowExecutionStatus}
+     *
+     * 用户请求暂停
+     *     ↓
+     * API 层 (ExecutorController){@link ExecutorController#controlWorkflowInstance(User, Integer, ExecuteType)}
+     *     ↓
+     * PauseWorkflowInstanceExecutorDelegate
+     *     ↓
+     * RPC 调用 Master (WorkflowControlClient)
+     *     ↓
+     * WorkflowExecutionRunnable.pause()
+     *     ↓
+     * 发布 WorkflowPauseLifecycleEvent
+     *     ↓
+     * WorkflowPauseLifecycleEventHandler
+     *     ↓
+     * WorkflowRunningStateAction.pauseEventAction()
+     *     ↓
+     * 1. 状态转换: RUNNING_EXECUTION → READY_PAUSE
+     * 2. 暂停活跃任务: pauseActiveTask()
+     *
+     * READY_PAUSE 是中间状态，表示“准备暂停”，正在等待所有活跃任务暂停完成
+     * 当所有活跃任务都暂停后，工作流状态会从 READY_PAUSE 转换为 PAUSE（最终状态）
+     * 这个设计允许异步暂停，避免阻塞等待所有任务立即暂停
+     *
+     * @param workflowInstanceControlRequest
+     * @return
+     */
     @Override
     public Void execute(PauseWorkflowInstanceOperation workflowInstanceControlRequest) {
         final WorkflowInstance workflowInstance = workflowInstanceControlRequest.workflowInstance;
         exceptionIfWorkflowInstanceCannotPause(workflowInstance);
+        /**{@link WorkflowExecutionStatus#SERIAL_WAIT}*/
         if (ifWorkflowInstanceCanDirectPauseInDB(workflowInstance)) {
+            //工作流状态可以直接在数据库中暂停（canDirectPauseInDB()），直接更新数据库状态为 PAUSE
             directPauseInDB(workflowInstance);
         } else {
+            //  Master 处理暂停请求
             pauseInMaster(workflowInstance);
         }
         return null;

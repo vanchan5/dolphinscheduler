@@ -69,7 +69,7 @@ public enum CommandType {
     /**
      * Backfill the workflow, will use complementScheduleDateList to generate the workflow instance.
      */
-    COMPLEMENT_DATA(5, "complement data"),
+    COMPLEMENT_DATA(5, "complement data"),// 补数
     /**
      * Start workflow from scheduler, will generate a new workflow instance and start from the beginning tasks.
      * This command is same with START_PROCESS but with different trigger source.

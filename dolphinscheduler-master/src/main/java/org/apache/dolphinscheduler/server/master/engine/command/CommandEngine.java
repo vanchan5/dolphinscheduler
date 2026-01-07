@@ -170,6 +170,12 @@ public class CommandEngine extends BaseDaemonThread implements AutoCloseable {
         }
     }
 
+    /**
+     * 先删除数据库的Command,增加Command的设计是为了分布式的并发处理
+     *
+     * @param command
+     * @return
+     */
     private CompletableFuture<IWorkflowExecutionRunnable> bootstrapCommand(Command command) {
         return supplyAsync(
                 () -> workflowExecutionRunnableFactory.createWorkflowExecuteRunnable(command), commandHandleThreadPool);

@@ -21,11 +21,14 @@ import org.apache.dolphinscheduler.dao.entity.TaskDefinition;
 import org.apache.dolphinscheduler.plugin.task.api.enums.TaskExecutionStatus;
 import org.apache.dolphinscheduler.server.master.engine.ILifecycleEventType;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.TaskLifecycleEventType;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskFailoverLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskStartLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskTimeoutLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.ITaskExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.TaskExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.task.statemachine.ITaskStateAction;
+import org.apache.dolphinscheduler.server.master.engine.task.statemachine.TaskDispatchStateAction;
+import org.apache.dolphinscheduler.server.master.engine.task.statemachine.TaskRunningStateAction;
 import org.apache.dolphinscheduler.server.master.engine.task.statemachine.TaskSubmittedStateAction;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowStartLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
@@ -71,6 +74,26 @@ public class TaskStartLifecycleEventHandler extends AbstractTaskLifecycleEventHa
         super.handle(workflowExecutionRunnable, taskStartLifecycleEvent);
     }
 
+    /**
+     * 1、正常流程执行的工作流
+     * 此时任务执行状态为 {@link TaskExecutionStatus#SUBMITTED_SUCCESS}
+     * ITaskStateAction为 {@link TaskSubmittedStateAction#startEventAction(IWorkflowExecutionRunnable, ITaskExecutionRunnable, TaskStartLifecycleEvent)}
+     *
+     * 2、故障恢复执行的工作流,任务状态 {@link TaskExecutionStatus} 不确定
+     *    2.1、RUNNING_EXECUTION
+     *         {@link TaskRunningStateAction} 发布{@link TaskFailoverLifecycleEvent} {@link TaskFailoverLifecycleEventHandler}
+     *      -> {@link TaskRunningStateAction#failoverEventAction(IWorkflowExecutionRunnable, ITaskExecutionRunnable, TaskFailoverLifecycleEvent)}
+     *      最终调用 {@link TaskExecutionRunnable#takeOverTaskFromExecutor()}
+     *    2.2、DISPATCH
+     *         {@link TaskDispatchStateAction } {发布{@link TaskFailoverLifecycleEvent} {@link TaskFailoverLifecycleEventHandler}
+     *      -> {@link TaskRunningStateAction#failoverEventAction(IWorkflowExecutionRunnable, ITaskExecutionRunnable, TaskFailoverLifecycleEvent)}
+     *      最终调用 {@link TaskExecutionRunnable#takeOverTaskFromExecutor()}
+     *
+     * @param taskStateAction
+     * @param workflowExecutionRunnable
+     * @param taskExecutionRunnable
+     * @param event
+     */
     @Override
     public void handle(final ITaskStateAction taskStateAction,
                        final IWorkflowExecutionRunnable workflowExecutionRunnable,

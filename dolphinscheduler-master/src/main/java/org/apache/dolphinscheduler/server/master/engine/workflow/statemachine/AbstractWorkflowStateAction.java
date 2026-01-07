@@ -70,7 +70,7 @@ public abstract class AbstractWorkflowStateAction implements IWorkflowStateActio
         final IWorkflowExecutionGraph workflowExecutionGraph = workflowExecutionRunnable.getWorkflowExecutionGraph();
         final List<ITaskExecutionRunnable> readyTaskExecutionRunnableList = taskExecutionRunnables
                 .stream()
-                .filter(workflowExecutionGraph::isTriggerConditionMet)
+                .filter(workflowExecutionGraph::isTriggerConditionMet) //是否满足触发条件
                 .collect(Collectors.toList());
         if (CollectionUtils.isEmpty(readyTaskExecutionRunnableList)) {
             emitWorkflowFinishedEventIfApplicable(workflowExecutionRunnable);

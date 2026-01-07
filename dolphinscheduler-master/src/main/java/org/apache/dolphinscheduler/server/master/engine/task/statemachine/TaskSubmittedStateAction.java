@@ -21,6 +21,8 @@ import org.apache.dolphinscheduler.common.utils.DateUtils;
 import org.apache.dolphinscheduler.dao.entity.TaskInstance;
 import org.apache.dolphinscheduler.dao.repository.TaskInstanceDao;
 import org.apache.dolphinscheduler.plugin.task.api.enums.TaskExecutionStatus;
+import org.apache.dolphinscheduler.server.master.engine.task.client.ITaskExecutorClient;
+import org.apache.dolphinscheduler.server.master.engine.task.client.ITaskExecutorClientDelegator;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskDispatchLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskDispatchedLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskFailedLifecycleEvent;
@@ -33,6 +35,7 @@ import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.Tas
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskRunningLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskStartLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskSuccessLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.TaskDispatchLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.TaskStartLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.ITaskExecutionRunnable;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
@@ -40,6 +43,7 @@ import org.apache.dolphinscheduler.server.master.runner.GlobalTaskDispatchWaitin
 
 import lombok.extern.slf4j.Slf4j;
 
+import org.apache.dolphinscheduler.server.master.runner.GlobalTaskDispatchWaitingQueueLooper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -80,7 +84,16 @@ public class TaskSubmittedStateAction extends AbstractTaskStateAction {
             return;
         }
 
-        //
+        /**
+         * 尝试调度任务,步骤:
+         * 1、发布 {@link TaskDispatchLifecycleEvent}
+         * 2、事件处理 {@link TaskDispatchLifecycleEventHandler}
+         * 3、调度任务动作 {@link TaskSubmittedStateAction#dispatchEventAction(IWorkflowExecutionRunnable, ITaskExecutionRunnable, TaskDispatchLifecycleEvent)}
+         * 4、放入全局任务调度等待队列 {@link GlobalTaskDispatchWaitingQueue#dispatchTaskExecuteRunnableWithDelay(ITaskExecutionRunnable, long)
+         * 5、由全局任务分发等待队列循环器{@link GlobalTaskDispatchWaitingQueueLooper#doDispatch()}调用任务执行客户端
+         * 6、任务执行期客户端 {@link ITaskExecutorClient#dispatch(ITaskExecutionRunnable)} 调度
+         * 7、最终调用{@link ITaskExecutorClientDelegator#dispatch(ITaskExecutionRunnable)}执行远程调用
+         */
         tryToDispatchTask(taskExecutionRunnable);
     }
 

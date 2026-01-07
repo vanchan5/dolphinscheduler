@@ -22,6 +22,8 @@ import org.apache.dolphinscheduler.server.master.engine.WorkflowEventBus;
 import org.apache.dolphinscheduler.server.master.engine.command.handler.AbstractCommandHandler;
 import org.apache.dolphinscheduler.server.master.engine.command.handler.RunWorkflowCommandHandler;
 import org.apache.dolphinscheduler.server.master.engine.graph.IWorkflowExecutionGraph;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event.TaskStartLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.TaskStartLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowFailedLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowFinalizeLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowPauseLifecycleEvent;
@@ -48,6 +50,7 @@ public class WorkflowRunningStateAction extends AbstractWorkflowStateAction {
      * 2、工作流开始事件组装对应的是 {@link RunWorkflowCommandHandler#assembleWorkflowExecutionGraph(WorkflowExecuteContext.WorkflowExecuteContextBuilder)}
      *
      * 触发点：{@link WorkflowStartLifecycleEventHandler#handle(IWorkflowStateAction, IWorkflowExecutionRunnable, WorkflowStartLifecycleEvent)}
+     *
      * @param workflowExecutionRunnable
      * @param workflowStartEvent
      */
@@ -57,6 +60,9 @@ public class WorkflowRunningStateAction extends AbstractWorkflowStateAction {
         throwExceptionIfStateIsNotMatch(workflowExecutionRunnable);
         final IWorkflowExecutionGraph workflowExecutionGraph =
                 workflowExecutionRunnable.getWorkflowExecuteContext().getWorkflowExecutionGraph();
+        /**
+         * 任务执行触发,发布{@link TaskStartLifecycleEvent} -> {@link TaskStartLifecycleEventHandler}
+         */
         triggerTasks(workflowExecutionRunnable, workflowExecutionGraph.getStartNodes());
     }
 

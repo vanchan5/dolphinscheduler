@@ -20,6 +20,7 @@ package org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.even
 import org.apache.dolphinscheduler.server.master.engine.ILifecycleEventType;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.AbstractWorkflowLifecycleLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.WorkflowLifecycleEventType;
+import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.handler.WorkflowStartLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
 
 import lombok.AccessLevel;
@@ -32,6 +33,12 @@ public class WorkflowStartLifecycleEvent extends AbstractWorkflowLifecycleLifecy
 
     private IWorkflowExecutionRunnable workflowExecutionRunnable;
 
+    /**
+     * {@link WorkflowStartLifecycleEventHandler}
+     *
+     * @param workflowExecutionRunnable
+     * @return
+     */
     public static WorkflowStartLifecycleEvent of(IWorkflowExecutionRunnable workflowExecutionRunnable) {
         return new WorkflowStartLifecycleEvent(workflowExecutionRunnable);
     }

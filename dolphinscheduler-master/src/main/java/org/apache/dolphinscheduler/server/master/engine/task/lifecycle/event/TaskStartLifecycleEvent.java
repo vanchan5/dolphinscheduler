@@ -20,21 +20,46 @@ package org.apache.dolphinscheduler.server.master.engine.task.lifecycle.event;
 import org.apache.dolphinscheduler.server.master.engine.ILifecycleEventType;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.AbstractTaskLifecycleEvent;
 import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.TaskLifecycleEventType;
+import org.apache.dolphinscheduler.server.master.engine.task.lifecycle.handler.TaskStartLifecycleEventHandler;
 import org.apache.dolphinscheduler.server.master.engine.task.runnable.ITaskExecutionRunnable;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;
+import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.event.WorkflowStartLifecycleEvent;
+import org.apache.dolphinscheduler.server.master.engine.workflow.lifecycle.handler.WorkflowStartLifecycleEventHandler;
+import org.apache.dolphinscheduler.server.master.engine.workflow.runnable.IWorkflowExecutionRunnable;
+import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.AbstractWorkflowStateAction;
+import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.IWorkflowStateAction;
+import org.apache.dolphinscheduler.server.master.engine.workflow.statemachine.WorkflowRunningStateAction;
 
+import java.util.List;
+
+
+/**
+ * 任务开始触发点:
+ * {@link WorkflowStartLifecycleEventHandler#handle(IWorkflowStateAction, IWorkflowExecutionRunnable, WorkflowStartLifecycleEvent)} ->
+ * {@link WorkflowRunningStateAction#startEventAction(IWorkflowExecutionRunnable, WorkflowStartLifecycleEvent)} ->
+ * {@link AbstractWorkflowStateAction#triggerTasks(IWorkflowExecutionRunnable, List)}
+ */
 @Getter
 @AllArgsConstructor
 public class TaskStartLifecycleEvent extends AbstractTaskLifecycleEvent {
 
     private final ITaskExecutionRunnable taskExecutionRunnable;
 
+    /**
+     * {@link TaskStartLifecycleEventHandler}
+     * @param taskExecutionRunnable
+     * @return
+     */
     public static TaskStartLifecycleEvent of(ITaskExecutionRunnable taskExecutionRunnable) {
         return new TaskStartLifecycleEvent(taskExecutionRunnable);
     }
 
+    /**
+     * 处理器 {@link TaskStartLifecycleEventHandler}
+     * @return
+     */
     @Override
     public ILifecycleEventType getEventType() {
         return TaskLifecycleEventType.START;

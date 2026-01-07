@@ -40,6 +40,14 @@ public class MasterFailoverEvent extends AbstractSystemEvent {
         this.eventTime = eventTime;
     }
 
+    /**
+     * {@link MasterFailoverEventHandler}
+     *
+     * @param masterServerMetadata
+     * @param eventTime
+     * @param delayTime
+     * @return
+     */
     public static MasterFailoverEvent of(final MasterServerMetadata masterServerMetadata,
                                          final Date eventTime,
                                          final long delayTime) {

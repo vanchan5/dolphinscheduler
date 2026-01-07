@@ -51,12 +51,19 @@ public class WorkflowSuccessLifecycleListener implements IWorkflowLifecycleListe
     @Autowired
     private CommandDao commandDao;
 
+    /**
+     * 触发点: 前端选择工作流定义,启动勾选补数 {@link org.apache.dolphinscheduler.api.service.impl.ExecutorServiceImpl#backfillWorkflowDefinition(org.apache.dolphinscheduler.api.dto.workflow.WorkflowBackFillRequest)}
+     *
+     * @param workflowExecutionRunnable
+     * @param lifecycleEvent
+     */
     public void notifyWorkflowLifecycleEvent(final IWorkflowExecutionRunnable workflowExecutionRunnable,
                                              final AbstractWorkflowLifecycleLifecycleEvent lifecycleEvent) {
         final WorkflowInstance workflowInstance = workflowExecutionRunnable.getWorkflowInstance();
         if (Flag.YES == workflowInstance.getIsSubWorkflow()) {
             // The sub workflow does not need to generate the backfill command
             // Since the parent workflow will trigger the task to generate the sub workflow instance.
+            //子工作流不需要生成回填命令，因为父工作流会触发任务生成子工作流实例。
             return;
         }
 
@@ -70,6 +77,7 @@ public class WorkflowSuccessLifecycleListener implements IWorkflowLifecycleListe
         if (commandParam.getCommandType() != CommandType.COMPLEMENT_DATA) {
             return;
         }
+        // 生成下一个回填命令,在串行补数据中实现链式触发：从已完成的命令参数中移除当前时间点，若还有剩余则触发下一个工作流实例，从而保证串行顺序执行
         generateNextBackfillCommand((BackfillWorkflowCommandParam) commandParam, workflowInstance);
     }
 
