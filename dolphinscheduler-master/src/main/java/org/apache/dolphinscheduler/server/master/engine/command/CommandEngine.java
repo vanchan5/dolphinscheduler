@@ -141,6 +141,8 @@ public class CommandEngine extends BaseDaemonThread implements AutoCloseable {
                  *      更新状态为 {@link WorkflowExecutionStatus.RUNNING_EXECUTION}
                  *
                  * command和workflowInstance来源：{@link AbstractWorkflowTrigger#constructTriggerCommand(Object, WorkflowInstance)}
+                 *
+                 * 基于 SLOT 的分配机制在 Command ID 连续且分布均匀时基本均衡
                  */
                 List<Command> commands = commandFetcher.fetchCommands();
                 if (CollectionUtils.isEmpty(commands)) {
