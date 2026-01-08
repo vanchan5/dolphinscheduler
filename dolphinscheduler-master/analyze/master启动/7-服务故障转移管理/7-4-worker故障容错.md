@@ -958,7 +958,7 @@ graph TB
 
 ## 10. 场景分析与处理方案
 
-### 9.1 场景1：网络抖动导致临时断开
+### 10.1 场景1：网络抖动导致临时断开
 
 **场景描述**：
 - Worker 因网络抖动临时断开与 ZooKeeper 的连接
@@ -975,7 +975,7 @@ graph TB
 - 延迟确认：[`ClusterStateMonitors#workerRemoved()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/cluster/ClusterStateMonitors.java#L171-L175)
 - 启动时间检查：[`FailoverCoordinator#failoverWorker()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/failover/FailoverCoordinator.java#L338-L346)
 
-### 9.2 场景2：Worker 进程崩溃
+### 10.2 场景2：Worker 进程崩溃
 
 **场景描述**：
 - Worker 进程因异常崩溃
@@ -993,7 +993,7 @@ graph TB
 - 任务查询：[`FailoverCoordinator#getFailoverTaskForWorker()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/failover/FailoverCoordinator.java#L420-L457)
 - 创建新实例：[`FailoverTaskInstanceFactory#createTaskInstance()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/FailoverTaskInstanceFactory.java#L47-L69)
 
-### 9.3 场景3：Worker 正常但任务已失败
+### 10.3 场景3：Worker 正常但任务已失败
 
 **场景描述**：
 - Worker 正常运行
@@ -1008,7 +1008,7 @@ graph TB
 **代码位置**：
 - 状态过滤：[`FailoverCoordinator#getFailoverTaskForWorker()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/failover/FailoverCoordinator.java#L426-L429)
 
-### 9.4 场景4：任务已在 Worker 上执行，Worker 故障但任务快完成
+### 10.4 场景4：任务已在 Worker 上执行，Worker 故障但任务快完成
 
 **场景描述**：
 - 任务已在 Worker 上执行，接近完成
@@ -1025,7 +1025,7 @@ graph TB
 - 接管尝试：[`TaskExecutionRunnable#takeOverTaskFromExecutor()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/TaskExecutionRunnable.java#L410-L422)
 - RPC 调用：[`PhysicalTaskExecutorClientDelegator#reassignMasterHost()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/client/PhysicalTaskExecutorClientDelegator.java#L107-L159)
 
-### 9.5 场景5：多个 Master 同时检测到 Worker 故障
+### 10.5 场景5：多个 Master 同时检测到 Worker 故障
 
 **场景描述**：
 - 多个 Master 节点同时运行
@@ -1043,7 +1043,7 @@ graph TB
 - 内存查询：[`FailoverCoordinator#getFailoverTaskForWorker()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/failover/FailoverCoordinator.java#L430-L431)
 - 原任务标记：[`FailoverTaskInstanceFactory#createTaskInstance()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/FailoverTaskInstanceFactory.java#L65-L67)
 
-### 9.6 场景6：任务组资源占用
+### 10.6 场景6：任务组资源占用
 
 **场景描述**：
 - 任务使用了任务组资源
@@ -1058,9 +1058,735 @@ graph TB
 **代码位置**：
 - 资源释放：[`FailoverTaskInstanceFactory#createTaskInstance()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/FailoverTaskInstanceFactory.java#L61-L63)
 
-## 11. 关键设计点
+## 11. Worker 故障转移事件驱动架构
 
-### 10.1 延迟确认机制
+### 11.1 发布-订阅模式 - 事件总线架构
+
+Worker 故障转移采用**发布-订阅（Pub-Sub）模式**的事件驱动架构，实现了监控层与处理层的解耦。
+
+```mermaid
+sequenceDiagram
+    participant Publisher as 发布者<br/>ClusterStateMonitors
+    participant EventBus as SystemEventBus<br/>事件总线(延迟队列)
+    participant Subscriber as SystemEventBusFireWorker<br/>订阅者(消费者线程)
+    participant Handler as WorkerFailoverEventHandler
+    
+    Note over Publisher,Handler: 发布阶段
+    Publisher->>EventBus: publish(WorkerFailoverEvent, delay=30s)
+    
+    Note over EventBus,Handler: 存储阶段(延迟队列)
+    EventBus->>EventBus: 事件按延迟时间排序<br/>DelayQueue.offer(event)
+    Note over EventBus: 事件在队列中等待30秒到期
+    
+    Note over Subscriber,Handler: 订阅消费阶段
+    loop 持续监听
+        Subscriber->>EventBus: take() (阻塞等待)
+        EventBus->>EventBus: 检查事件是否到期<br/>getDelay() <= 0?
+        alt 事件未到期
+            EventBus->>EventBus: Condition.awaitNanos(delay)<br/>阻塞等待剩余时间
+        else 事件已到期
+            EventBus-->>Subscriber: 返回到期的事件
+            Subscriber->>Subscriber: fireSystemEvent(event)
+            
+            Note over Subscriber,Handler: 匹配Handler策略
+            Subscriber->>Handler: matchState() == WORKER_FAILOVER?
+            Handler-->>Subscriber: true
+            
+            Subscriber->>Handler: handle(WorkerFailoverEvent)
+            Handler->>Handler: failoverCoordinator<br/>.failoverWorker(event)
+        end
+    end
+```
+
+```mermaid
+graph TB
+    subgraph "发布者 Publisher"
+        CSM[ClusterStateMonitors<br/>集群状态监控器]
+    end
+    
+    subgraph "事件总线 Event Bus"
+        SEB[SystemEventBus<br/>DelayQueue~AbstractSystemEvent~]
+        direction TB
+        SEB -->|延迟队列| Queue[DelayQueue<br/>按过期时间排序]
+        Queue -->|存储| WFE[WorkerFailoverEvent<br/>延迟30秒]
+    end
+    
+    subgraph "订阅者 Subscriber"
+        SEFW[SystemEventBusFireWorker<br/>守护线程]
+    end
+    
+    subgraph "事件处理器 Handler"
+        WFH[WorkerFailoverEventHandler<br/>Worker故障转移事件处理器]
+    end
+    
+    subgraph "故障转移协调器"
+        FC[FailoverCoordinator<br/>故障转移协调器]
+    end
+    
+    CSM -->|publish| SEB
+    SEB -->|存储到延迟队列| Queue
+    Queue -->|30秒后到期| WFE
+    SEFW -->|take阻塞等待| Queue
+    WFE -->|到期事件| SEFW
+    SEFW -->|匹配Handler| WFH
+    WFH -->|failoverWorker| FC
+    
+    style SEB fill:#e1f5ff
+    style Queue fill:#fff4e1
+    style SEFW fill:#e8f5e9
+    style WFH fill:#f3e5f5
+    style FC fill:#fff9c4
+```
+
+### 11.2 策略模式 - Event 和 Handler 匹配策略
+
+系统事件处理采用**策略模式**，通过事件类型动态匹配对应的处理器。
+
+```mermaid
+classDiagram
+    class SystemEventBusFireWorker {
+        -SystemEventBus systemEventBus
+        -List~ISystemEventHandler~ systemEventHandlers
+        +run() void
+        +fireSystemEvent(AbstractSystemEvent) void
+    }
+    
+    class ISystemEventHandler~T~ {
+        <<interface>>
+        +handle(T event) void
+        +matchState() SystemEventType
+    }
+    
+    class WorkerFailoverEventHandler {
+        -FailoverCoordinator failoverCoordinator
+        +matchState() SystemEventType
+        +handle(WorkerFailoverEvent) void
+    }
+    
+    class GlobalMasterFailoverEventHandler {
+        +matchState() SystemEventType
+        +handle(GlobalMasterFailoverEvent) void
+    }
+    
+    class MasterFailoverEventHandler {
+        +matchState() SystemEventType
+        +handle(MasterFailoverEvent) void
+    }
+    
+    class AbstractSystemEvent {
+        <<abstract>>
+        +getEventType() SystemEventType
+    }
+    
+    class WorkerFailoverEvent {
+        -WorkerServerMetadata workerServerMetadata
+        -Date eventTime
+        +getEventType() SystemEventType
+    }
+    
+    class SystemEventType {
+        <<enumeration>>
+        GLOBAL_MASTER_FAILOVER
+        MASTER_FAILOVER
+        WORKER_FAILOVER
+    }
+    
+    SystemEventBusFireWorker --> ISystemEventHandler : 持有Handler列表
+    ISystemEventHandler <|.. WorkerFailoverEventHandler : 策略1
+    ISystemEventHandler <|.. GlobalMasterFailoverEventHandler : 策略2
+    ISystemEventHandler <|.. MasterFailoverEventHandler : 策略3
+    
+    AbstractSystemEvent <|-- WorkerFailoverEvent
+    AbstractSystemEvent <|-- GlobalMasterFailoverEvent
+    AbstractSystemEvent <|-- MasterFailoverEvent
+    
+    SystemEventBusFireWorker ..> AbstractSystemEvent : 接收事件
+    SystemEventBusFireWorker ..> ISystemEventHandler : 根据matchState()匹配Handler
+    
+    WorkerFailoverEvent --> SystemEventType : WORKER_FAILOVER
+    GlobalMasterFailoverEvent --> SystemEventType : GLOBAL_MASTER_FAILOVER
+    MasterFailoverEvent --> SystemEventType : MASTER_FAILOVER
+    
+    WorkerFailoverEventHandler --> SystemEventType : matchState()返回WORKER_FAILOVER
+    GlobalMasterFailoverEventHandler --> SystemEventType : matchState()返回GLOBAL_MASTER_FAILOVER
+    MasterFailoverEventHandler --> SystemEventType : matchState()返回MASTER_FAILOVER
+    
+    note for SystemEventBusFireWorker "策略选择逻辑:\n1. 遍历所有Handler\n2. 调用matchState()获取Handler的EventType\n3. 与Event的getEventType()比较\n4. 匹配则调用handle()方法"
+    note for ISystemEventHandler "策略接口:\n每个Handler实现matchState()\n返回自己处理的EventType"
+```
+
+**策略匹配流程**：
+
+```java
+// SystemEventBusFireWorker.fireSystemEvent()
+private void fireSystemEvent(final AbstractSystemEvent systemEvent) {
+    // 1. 从所有注册的事件处理器中筛选出与当前事件类型匹配的处理器
+    final List<ISystemEventHandler> matchedSystemEventHandlers = systemEventHandlers
+            .stream()
+            .filter(systemEventHandler -> systemEventHandler.matchState() == systemEvent.getEventType())
+            .collect(Collectors.toList());
+    
+    // 2. 遍历所有匹配的处理器，依次执行处理逻辑
+    matchedSystemEventHandlers.forEach(systemEventHandler -> systemEventHandler.handle(systemEvent));
+}
+```
+
+### 11.3 Worker 故障转移事件驱动完整流程
+
+```mermaid
+sequenceDiagram
+    participant ZK as ZooKeeper<br/>注册中心
+    participant TC as TreeCache
+    participant Registry as RegistryClient
+    participant WCM as WorkerClusters
+    participant CSM as ClusterStateMonitors
+    participant WFE as WorkerFailoverEvent
+    participant SEB as SystemEventBus<br/>延迟事件队列
+    participant SEFW as SystemEventBusFireWorker<br/>消费线程
+    participant WFH as WorkerFailoverEventHandler
+    participant FC as FailoverCoordinator
+    participant TF as TaskFailover
+    participant WER as WorkflowEventBus
+    
+    Note over ZK,WER: 阶段1: 事件发布（延迟30秒）
+    ZK->>TC: 节点移除事件
+    TC->>Registry: childEvent(REMOVE)
+    Registry->>WCM: onServerRemove(workerServer)
+    WCM->>CSM: workerRemoved(workerServer)
+    CSM->>WFE: WorkerFailoverEvent.of(workerServer, new Date(), 30_000)
+    CSM->>SEB: publish(WorkerFailoverEvent, delay=30s)
+    SEB->>SEB: DelayQueue.add(event)<br/>按过期时间排序
+    
+    Note over SEB: 阶段2: 事件等待（延迟30秒）
+    Note over SEB: 事件在队列中等待30秒到期<br/>DelayQueue自动排序和阻塞
+    
+    Note over SEFW,WER: 阶段3: 事件消费（30秒后）
+    SEFW->>SEB: take() (阻塞等待)
+    SEB->>WFE: getDelay(TimeUnit.NANOSECONDS)
+    WFE-->>SEB: delay <= 0 (已到期)
+    SEB-->>SEFW: WorkerFailoverEvent
+    
+    Note over SEFW,WER: 阶段4: 事件处理和匹配
+    SEFW->>SEFW: fireSystemEvent(WorkerFailoverEvent)
+    SEFW->>WFH: matchState() == WORKER_FAILOVER?
+    WFH-->>SEFW: true (匹配)
+    SEFW->>WFH: handle(WorkerFailoverEvent)
+    
+    Note over WFH,WER: 阶段5: 故障转移处理
+    WFH->>FC: failoverWorker(WorkerFailoverEvent)
+    FC->>FC: 检查Worker是否存活
+    alt Worker已重连
+        FC->>FC: 跳过故障转移
+    else Worker确实故障
+        FC->>FC: getFailoverTaskForWorker()
+        loop 每个需要故障转移的任务
+            FC->>TF: failoverTask(taskExecutionRunnable)
+            TF->>WER: publish(TaskFailoverLifecycleEvent)
+        end
+        FC->>ZK: 持久化故障转移状态
+    end
+```
+
+### 11.4 事件驱动架构的核心组件
+
+#### 11.4.1 WorkerFailoverEvent（事件）
+
+**职责**：封装 Worker 故障转移事件信息
+
+```java
+@Getter
+public class WorkerFailoverEvent extends AbstractSystemEvent {
+    private final WorkerServerMetadata workerServerMetadata;  // 故障的Worker元数据
+    private final Date eventTime;                              // 事件时间
+    private final long delayTime;                              // 延迟时间（30秒）
+    
+    public static WorkerFailoverEvent of(final WorkerServerMetadata workerServerMetadata,
+                                        final Date eventTime,
+                                        final long delayTime) {
+        return new WorkerFailoverEvent(workerServerMetadata, eventTime, delayTime);
+    }
+    
+    @Override
+    public SystemEventType getEventType() {
+        return SystemEventType.WORKER_FAILOVER;
+    }
+}
+```
+
+**关键特性**：
+- 继承 `AbstractSystemEvent`，实现 `Delayed` 接口
+- 延迟时间默认为 30 秒（避免误触发）
+- 包含故障 Worker 的元数据信息
+
+**代码位置**：
+- 事件定义：[`WorkerFailoverEvent.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/system/event/WorkerFailoverEvent.java)
+- 事件发布：[`ClusterStateMonitors#workerRemoved()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/cluster/ClusterStateMonitors.java#L171-L175)
+
+#### 11.4.2 SystemEventBus（事件总线）
+
+**职责**：存储和管理系统事件，支持延迟事件
+
+```java
+@Component
+public class SystemEventBus extends AbstractDelayEventBus<AbstractSystemEvent> {
+    private final DelayQueue<AbstractSystemEvent> delayEventQueue;
+    
+    public void publish(final AbstractSystemEvent event) {
+        delayEventQueue.add(event);  // 添加到延迟队列
+    }
+    
+    public AbstractSystemEvent take() throws InterruptedException {
+        return delayEventQueue.take();  // 阻塞等待直到事件到期
+    }
+}
+```
+
+**关键特性**：
+- 使用 `DelayQueue` 实现延迟事件队列
+- 自动按过期时间排序（最早到期的事件优先）
+- `take()` 方法阻塞等待，直到有事件到期
+
+**代码位置**：
+- 事件总线：[`SystemEventBus.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/system/SystemEventBus.java)
+
+#### 11.4.3 SystemEventBusFireWorker（事件消费线程）
+
+**职责**：从事件总线中取出到期的事件并触发相应的处理器
+
+```java
+@Component
+public class SystemEventBusFireWorker extends BaseDaemonThread {
+    @Autowired
+    private SystemEventBus systemEventBus;
+    
+    @Autowired
+    private List<ISystemEventHandler> systemEventHandlers;
+    
+    @Override
+    public void run() {
+        while (flag) {
+            // 1. 阻塞等待，直到有事件到期
+            final AbstractSystemEvent systemEvent = systemEventBus.take();
+            
+            // 2. 触发事件处理
+            fireSystemEvent(systemEvent);
+        }
+    }
+    
+    private void fireSystemEvent(final AbstractSystemEvent systemEvent) {
+        // 1. 匹配Handler
+        final List<ISystemEventHandler> matchedHandlers = systemEventHandlers
+                .stream()
+                .filter(handler -> handler.matchState() == systemEvent.getEventType())
+                .collect(Collectors.toList());
+        
+        // 2. 执行处理
+        matchedHandlers.forEach(handler -> handler.handle(systemEvent));
+    }
+}
+```
+
+**关键特性**：
+- 守护线程，持续监听事件总线
+- 使用策略模式匹配对应的 Handler
+- 异常处理：如果处理失败，将事件重新放回队列重试
+
+**代码位置**：
+- 消费线程：[`SystemEventBusFireWorker.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/system/SystemEventBusFireWorker.java)
+
+#### 11.4.4 WorkerFailoverEventHandler（事件处理器）
+
+**职责**：处理 Worker 故障转移事件
+
+```java
+@Component
+public class WorkerFailoverEventHandler implements ISystemEventHandler<WorkerFailoverEvent> {
+    @Autowired
+    private FailoverCoordinator failoverCoordinator;
+    
+    @Override
+    public void handle(final WorkerFailoverEvent workerFailoverEvent) {
+        failoverCoordinator.failoverWorker(workerFailoverEvent);
+    }
+    
+    @Override
+    public SystemEventType matchState() {
+        return SystemEventType.WORKER_FAILOVER;  // 匹配WORKER_FAILOVER类型的事件
+    }
+}
+```
+
+**关键特性**：
+- 实现 `ISystemEventHandler<WorkerFailoverEvent>` 接口
+- `matchState()` 返回 `WORKER_FAILOVER`，用于事件匹配
+- `handle()` 方法委托给 `FailoverCoordinator` 执行实际的故障转移逻辑
+
+**代码位置**：
+- 事件处理器：[`WorkerFailoverEventHandler.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/system/event/WorkerFailoverEventHandler.java)
+
+### 11.5 事件驱动故障转移完整流程
+
+Worker 故障转移容错涉及多层事件流转，从系统级事件到任务级生命周期事件，形成了一个完整的事件驱动链路。
+
+#### 11.5.1 事件流转链路概览
+
+```mermaid
+graph TB
+    subgraph "系统级事件（SystemEventBus）"
+        WFE[WorkerFailoverEvent<br/>延迟30秒]
+        WFH[WorkerFailoverEventHandler]
+    end
+    
+    subgraph "任务生命周期事件（WorkflowEventBus）"
+        TFE[TaskFailoverLifecycleEvent]
+        TSE[TaskStartLifecycleEvent]
+        TDE[TaskDispatchLifecycleEvent]
+        TDSE[TaskDispatchedLifecycleEvent]
+        TRE[TaskRunningLifecycleEvent]
+        TSUCE[TaskSuccessLifecycleEvent<br/>或TaskFailedLifecycleEvent]
+    end
+    
+    subgraph "Handler层"
+        TFH[TaskFailoverLifecycleEventHandler]
+        TSH[TaskStartLifecycleEventHandler]
+        TDH[TaskDispatchLifecycleEventHandler]
+        TDSH[TaskDispatchedLifecycleEventHandler]
+        TRH[TaskRunningLifecycleEventHandler]
+        TSUCH[TaskSuccessLifecycleEventHandler]
+    end
+    
+    subgraph "StateAction层"
+        TRSA[TaskRunningStateAction<br/>failoverEventAction]
+        TSUSA[TaskSubmittedStateAction<br/>startEventAction<br/>dispatchEventAction]
+        TDSA[TaskDispatchStateAction<br/>dispatchedEventAction]
+    end
+    
+    subgraph "故障转移处理"
+        FC[FailoverCoordinator]
+        TER[TaskExecutionRunnable<br/>failover]
+        FTIF[FailoverTaskInstanceFactory]
+    end
+    
+    WFE -->|30秒后| WFH
+    WFH -->|failoverWorker| FC
+    FC -->|failoverTask| TFE
+    TFE -->|匹配Handler| TFH
+    TFH -->|failoverEventAction| TRSA
+    TRSA -->|failover| TER
+    TER -->|takeOver失败| FTIF
+    TER -->|创建新实例| TSE
+    TSE -->|匹配Handler| TSH
+    TSH -->|startEventAction| TSUSA
+    TSUSA -->|tryToDispatchTask| TDE
+    TDE -->|匹配Handler| TDH
+    TDH -->|dispatchEventAction| TSUSA
+    TSUSA -->|dispatchTask| TDSE
+    TDSE -->|Worker报告| TDSH
+    TDSH -->|dispatchedEventAction| TDSA
+    TDSE -->|Worker执行| TRE
+    TRE -->|Worker报告| TRH
+    TRE -->|任务完成| TSUCE
+    TSUCE -->|Worker报告| TSUCH
+```
+
+#### 11.5.2 完整事件流转时序图
+
+```mermaid
+sequenceDiagram
+    participant ZK as ZooKeeper
+    participant CSM as ClusterStateMonitors
+    participant WFE as WorkerFailoverEvent
+    participant SEB as SystemEventBus
+    participant SEFW as SystemEventBusFireWorker
+    participant WFH as WorkerFailoverEventHandler
+    participant FC as FailoverCoordinator
+    participant TF as TaskFailover
+    participant WER as WorkflowEventBus
+    participant TFE as TaskFailoverLifecycleEvent
+    participant TFH as TaskFailoverLifecycleEventHandler
+    participant TRSA as TaskRunningStateAction
+    participant TER as TaskExecutionRunnable
+    participant FTIF as FailoverTaskInstanceFactory
+    participant TSE as TaskStartLifecycleEvent
+    participant TSH as TaskStartLifecycleEventHandler
+    participant TSUSA as TaskSubmittedStateAction
+    participant TDE as TaskDispatchLifecycleEvent
+    participant TDH as TaskDispatchLifecycleEventHandler
+    participant GTDQ as GlobalTaskDispatchWaitingQueue
+    participant TEC as TaskExecutorClient
+    participant Worker2 as Worker2（新）
+    participant TDSE as TaskDispatchedLifecycleEvent
+    participant TDSH as TaskDispatchedLifecycleEventHandler
+    participant TDSA as TaskDispatchStateAction
+    participant TRE as TaskRunningLifecycleEvent
+    participant TRH as TaskRunningLifecycleEventHandler
+    participant TSUCE as TaskSuccessLifecycleEvent
+    participant TSUCH as TaskSuccessLifecycleEventHandler
+    
+    Note over ZK,SEFW: 阶段1: 系统级事件（延迟30秒）
+    ZK->>CSM: Worker节点移除
+    CSM->>WFE: WorkerFailoverEvent.of(workerServer, new Date(), 30_000)
+    CSM->>SEB: publish(WorkerFailoverEvent, delay=30s)
+    SEB->>SEB: DelayQueue.add(event)<br/>等待30秒到期
+    
+    Note over SEFW: 30秒后
+    SEFW->>SEB: take() (阻塞等待)
+    SEB-->>SEFW: WorkerFailoverEvent（已到期）
+    SEFW->>WFH: fireSystemEvent(WorkerFailoverEvent)
+    WFH->>FC: failoverWorker(WorkerFailoverEvent)
+    
+    Note over FC,WER: 阶段2: 任务故障转移事件
+    FC->>FC: getFailoverTaskForWorker()
+    FC->>TF: failoverTask(taskExecutionRunnable)
+    TF->>WER: publish(TaskFailoverLifecycleEvent)
+    
+    Note over WER,TRSA: 阶段3: 任务故障转移处理
+    WER->>TFH: handle(TaskFailoverLifecycleEvent)
+    TFH->>TRSA: failoverEventAction(workflowExecutionRunnable,<br/>  taskExecutionRunnable,<br/>  taskFailoverEvent)
+    TRSA->>TRSA: failoverTask(taskExecutionRunnable)
+    TRSA->>TER: failover()
+    
+    Note over TER,FTIF: 阶段4: 任务接管与重建
+    TER->>TER: takeOverTaskFromExecutor()<br/>RPC调用Worker1
+    alt Worker1可达且接管成功
+        TER->>TER: return true<br/>任务继续执行，无需重建
+        Note over TER: 只需更新workflowHost
+    else Worker1不可达或接管失败
+        TER->>FTIF: createTaskInstance()
+        FTIF->>FTIF: 创建新任务实例<br/>state=SUBMITTED_SUCCESS
+        FTIF->>TER: 返回新taskInstance
+        TER->>TER: initializeTaskExecutionContext()
+        TER->>WER: publish(TaskStartLifecycleEvent)
+    end
+    
+    Note over WER,TSUSA: 阶段5: 任务重新启动
+    WER->>TSH: handle(TaskStartLifecycleEvent)
+    TSH->>TSUSA: startEventAction(workflowExecutionRunnable,<br/>  taskExecutionRunnable,<br/>  taskStartEvent)
+    TSUSA->>TSUSA: tryToDispatchTask(taskExecutionRunnable)
+    TSUSA->>WER: publish(TaskDispatchLifecycleEvent)
+    
+    Note over WER,TDSA: 阶段6: 任务分发
+    WER->>TDH: handle(TaskDispatchLifecycleEvent)
+    TDH->>TSUSA: dispatchEventAction(workflowExecutionRunnable,<br/>  taskExecutionRunnable,<br/>  taskDispatchEvent)
+    TSUSA->>GTDQ: dispatchTaskExecuteRunnableWithDelay()
+    GTDQ->>TEC: dispatch(taskExecutionRunnable)
+    TEC->>Worker2: RPC dispatchTask()
+    Worker2->>Worker2: TaskEngine.submitTask()
+    Worker2->>Worker2: publish(TaskExecutorDispatchedLifecycleEvent)
+    Worker2->>Worker2: 报告给Master
+    Worker2->>TEC: TaskDispatchedLifecycleEvent
+    TEC->>WER: publish(TaskDispatchedLifecycleEvent)
+    
+    Note over WER,TDSA: 阶段7: 任务已分派确认
+    WER->>TDSH: handle(TaskDispatchedLifecycleEvent)
+    TDSH->>TDSA: dispatchedEventAction(workflowExecutionRunnable,<br/>  taskExecutionRunnable,<br/>  taskDispatchedEvent)
+    TDSH->>TEC: ackTaskExecutorLifecycleEvent()
+    TEC->>Worker2: ACK（确认收到）
+    
+    Note over Worker2,WER: 阶段8: 任务执行中
+    Worker2->>Worker2: publish(TaskExecutorStartedLifecycleEvent)
+    Worker2->>TEC: TaskRunningLifecycleEvent
+    TEC->>WER: publish(TaskRunningLifecycleEvent)
+    WER->>TRH: handle(TaskRunningLifecycleEvent)
+    TRH->>TRSA: startedEventAction(workflowExecutionRunnable,<br/>  taskExecutionRunnable,<br/>  taskRunningEvent)
+    TRH->>TEC: ackTaskExecutorLifecycleEvent()
+    
+    Note over Worker2,WER: 阶段9: 任务完成
+    Worker2->>Worker2: publish(TaskExecutorSuccessLifecycleEvent<br/>或TaskExecutorFailedLifecycleEvent)
+    Worker2->>TEC: TaskSuccessLifecycleEvent<br/>或TaskFailedLifecycleEvent
+    TEC->>WER: publish(TaskSuccessLifecycleEvent)
+    WER->>TSUCH: handle(TaskSuccessLifecycleEvent)
+    TSUCH->>TRSA: succeedEventAction(workflowExecutionRunnable,<br/>  taskExecutionRunnable,<br/>  taskSuccessEvent)
+    TSUCH->>TEC: ackTaskExecutorLifecycleEvent()
+```
+
+#### 11.5.3 关键事件详解
+
+##### 11.5.3.1 WorkerFailoverEvent（系统级事件）
+
+**事件类型**：`SystemEventType.WORKER_FAILOVER`  
+**发布位置**：[`ClusterStateMonitors#workerRemoved()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/cluster/ClusterStateMonitors.java#L171-L175)  
+**延迟时间**：30秒（避免误触发）  
+**Handler**：`WorkerFailoverEventHandler`  
+**处理逻辑**：调用 `FailoverCoordinator.failoverWorker()`
+
+**代码位置**：
+- 事件定义：[`WorkerFailoverEvent.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/system/event/WorkerFailoverEvent.java)
+- 事件处理器：[`WorkerFailoverEventHandler.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/system/event/WorkerFailoverEventHandler.java)
+
+##### 11.5.3.2 TaskFailoverLifecycleEvent（任务生命周期事件）
+
+**事件类型**：`TaskLifecycleEventType.FAILOVER`  
+**发布位置**：[`TaskFailover#failoverTask()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/failover/TaskFailover.java#L29-L33)  
+**延迟时间**：无延迟（立即处理）  
+**Handler**：`TaskFailoverLifecycleEventHandler`  
+**处理逻辑**：调用 `TaskStateAction.failoverEventAction()`
+
+**代码位置**：
+- 事件定义：[`TaskFailoverLifecycleEvent.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/event/TaskFailoverLifecycleEvent.java)
+- 事件处理器：[`TaskFailoverLifecycleEventHandler.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/handler/TaskFailoverLifecycleEventHandler.java)
+
+##### 11.5.3.3 TaskStartLifecycleEvent（任务生命周期事件）
+
+**事件类型**：`TaskLifecycleEventType.START`  
+**发布位置**：[`TaskExecutionRunnable#failover()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/TaskExecutionRunnable.java#L333)  
+**延迟时间**：无延迟（立即处理）  
+**Handler**：`TaskStartLifecycleEventHandler`  
+**处理逻辑**：
+- 如果任务实例未初始化，调用 `initializeFirstRunTaskInstance()`
+- 调用 `TaskStateAction.startEventAction()`
+
+**代码位置**：
+- 事件定义：[`TaskStartLifecycleEvent.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/event/TaskStartLifecycleEvent.java)
+- 事件处理器：[`TaskStartLifecycleEventHandler.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/handler/TaskStartLifecycleEventHandler.java)
+
+##### 11.5.3.4 TaskDispatchLifecycleEvent（任务生命周期事件）
+
+**事件类型**：`TaskLifecycleEventType.DISPATCH`  
+**发布位置**：[`AbstractTaskStateAction#tryToDispatchTask()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/statemachine/AbstractTaskStateAction.java#L235)  
+**延迟时间**：无延迟（立即处理）  
+**Handler**：`TaskDispatchLifecycleEventHandler`  
+**处理逻辑**：调用 `TaskStateAction.dispatchEventAction()`，将任务放入 `GlobalTaskDispatchWaitingQueue`
+
+**代码位置**：
+- 事件定义：[`TaskDispatchLifecycleEvent.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/event/TaskDispatchLifecycleEvent.java)
+- 事件处理器：[`TaskDispatchLifecycleEventHandler.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/handler/TaskDispatchLifecycleEventHandler.java)
+
+##### 11.5.3.5 TaskDispatchedLifecycleEvent（任务生命周期事件）
+
+**事件类型**：`TaskLifecycleEventType.DISPATCHED`  
+**发布位置**：Worker端通过RPC报告，Master端的 [`TaskDispatchedLifecycleEventHandler`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/handler/TaskDispatchedLifecycleEventHandler.java#L50-L57)  
+**延迟时间**：无延迟（立即处理）  
+**Handler**：`TaskDispatchedLifecycleEventHandler`  
+**处理逻辑**：
+- 调用 `TaskStateAction.dispatchedEventAction()`
+- 调用 `TaskExecutorClient.ackTaskExecutorLifecycleEvent()` 发送ACK给Worker
+
+**代码位置**：
+- 事件定义：[`TaskDispatchedLifecycleEvent.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/event/TaskDispatchedLifecycleEvent.java)
+- 事件处理器：[`TaskDispatchedLifecycleEventHandler.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/handler/TaskDispatchedLifecycleEventHandler.java)
+
+##### 11.5.3.6 TaskRunningLifecycleEvent（任务生命周期事件）
+
+**事件类型**：`TaskLifecycleEventType.RUNNING`  
+**发布位置**：Worker端通过RPC报告，Master端的 [`TaskRunningLifecycleEventHandler`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/handler/TaskRunningLifecycleEventHandler.java#L49-L54)  
+**延迟时间**：无延迟（立即处理）  
+**Handler**：`TaskRunningLifecycleEventHandler`  
+**处理逻辑**：
+- 调用 `TaskStateAction.startedEventAction()`
+- 调用 `TaskExecutorClient.ackTaskExecutorLifecycleEvent()` 发送ACK给Worker
+
+**代码位置**：
+- 事件定义：[`TaskRunningLifecycleEvent.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/event/TaskRunningLifecycleEvent.java)
+- 事件处理器：[`TaskRunningLifecycleEventHandler.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/handler/TaskRunningLifecycleEventHandler.java)
+
+##### 11.5.3.7 TaskSuccessLifecycleEvent / TaskFailedLifecycleEvent（任务生命周期事件）
+
+**事件类型**：`TaskLifecycleEventType.SUCCEEDED` / `TaskLifecycleEventType.FAILED`  
+**发布位置**：Worker端通过RPC报告，Master端的 [`TaskSuccessLifecycleEventHandler`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/handler/TaskSuccessLifecycleEventHandler.java#L46-L51) / [`TaskFailedLifecycleEventHandler`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/handler/TaskFailedLifecycleEventHandler.java)  
+**延迟时间**：无延迟（立即处理）  
+**Handler**：`TaskSuccessLifecycleEventHandler` / `TaskFailedLifecycleEventHandler`  
+**处理逻辑**：
+- 调用 `TaskStateAction.succeedEventAction()` / `failedEventAction()`
+- 调用 `TaskExecutorClient.ackTaskExecutorLifecycleEvent()` 发送ACK给Worker
+
+**代码位置**：
+- 事件定义：[`TaskSuccessLifecycleEvent.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/event/TaskSuccessLifecycleEvent.java) / [`TaskFailedLifecycleEvent.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/event/TaskFailedLifecycleEvent.java)
+- 事件处理器：[`TaskSuccessLifecycleEventHandler.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/handler/TaskSuccessLifecycleEventHandler.java) / [`TaskFailedLifecycleEventHandler.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/handler/TaskFailedLifecycleEventHandler.java)
+
+#### 11.5.4 StateAction与任务状态的映射关系
+
+在Worker故障转移过程中，不同的任务状态对应不同的StateAction：
+
+| 任务状态 | StateAction | 关键方法 | 说明 |
+|---------|------------|---------|------|
+| **RUNNING_EXECUTION** | `TaskRunningStateAction` | `failoverEventAction()` | 处理RUNNING_EXECUTION状态任务的故障转移 |
+| **DISPATCH** | `TaskDispatchStateAction` | `failoverEventAction()` | 处理DISPATCH状态任务的故障转移 |
+| **SUBMITTED_SUCCESS** | `TaskSubmittedStateAction` | `startEventAction()`<br/>`dispatchEventAction()` | 处理新任务实例的启动和分发 |
+| **NEED_FAULT_TOLERANCE** | `TaskFailoverStateAction` | 不处理任何事件 | 原任务实例标记为故障转移状态，不再处理事件 |
+
+**代码位置**：
+- `TaskRunningStateAction.failoverEventAction()`：[第133-139行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/statemachine/TaskRunningStateAction.java#L133-L139)
+- `TaskDispatchStateAction.failoverEventAction()`：[第141-146行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/statemachine/TaskDispatchStateAction.java#L141-L146)
+- `AbstractTaskStateAction.failoverTask()`：[第225-227行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/statemachine/AbstractTaskStateAction.java#L225-L227)
+
+#### 11.5.5 Handler与事件类型的映射关系
+
+所有任务生命周期事件都通过 `WorkflowEventBusFireWorker` 消费，并使用策略模式匹配对应的Handler：
+
+| 事件类型 | Handler | matchEventType()返回值 |
+|---------|---------|----------------------|
+| **FAILOVER** | `TaskFailoverLifecycleEventHandler` | `TaskLifecycleEventType.FAILOVER` |
+| **START** | `TaskStartLifecycleEventHandler` | `TaskLifecycleEventType.START` |
+| **DISPATCH** | `TaskDispatchLifecycleEventHandler` | `TaskLifecycleEventType.DISPATCH` |
+| **DISPATCHED** | `TaskDispatchedLifecycleEventHandler` | `TaskLifecycleEventType.DISPATCHED` |
+| **RUNNING** | `TaskRunningLifecycleEventHandler` | `TaskLifecycleEventType.RUNNING` |
+| **SUCCEEDED** | `TaskSuccessLifecycleEventHandler` | `TaskLifecycleEventType.SUCCEEDED` |
+| **FAILED** | `TaskFailedLifecycleEventHandler` | `TaskLifecycleEventType.FAILED` |
+
+**代码位置**：
+- Handler匹配逻辑：[`WorkflowEventBusFireWorker#fireWorkflowEvent()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/WorkflowEventBusFireWorker.java)
+
+#### 11.5.6 Worker端事件报告机制
+
+Worker端通过 `TaskExecutorEventBus` 发布任务执行器生命周期事件，并通过 `PhysicalTaskExecutorLifecycleEventReporter` 异步报告给Master：
+
+| Worker端事件 | Master端事件 | 报告方式 |
+|------------|------------|---------|
+| `TaskExecutorDispatchedLifecycleEvent` | `TaskDispatchedLifecycleEvent` | RPC异步报告 |
+| `TaskExecutorStartedLifecycleEvent` | `TaskRunningLifecycleEvent` | RPC异步报告 |
+| `TaskExecutorRuntimeContextChangedLifecycleEvent` | `TaskRuntimeContextChangedLifecycleEvent` | RPC异步报告 |
+| `TaskExecutorSuccessLifecycleEvent` | `TaskSuccessLifecycleEvent` | RPC异步报告 |
+| `TaskExecutorFailedLifecycleEvent` | `TaskFailedLifecycleEvent` | RPC异步报告 |
+
+**关键点**：
+- Worker端的事件报告是**异步的**，不阻塞任务执行
+- Master收到事件后发送ACK确认，Worker收到ACK后才从事件队列中移除
+- 如果未收到ACK，Worker会按照重试间隔（默认3分钟）重试发送
+
+**代码位置**：
+- Worker端事件报告：[`PhysicalTaskExecutorLifecycleEventReporter.java`](../../../../dolphinscheduler-worker/src/main/java/org/apache/dolphinscheduler/server/worker/executor/PhysicalTaskExecutorLifecycleEventReporter.java)
+- Master端事件接收：[`PhysicalTaskExecutorOperatorImpl#receiveTaskExecutorLifecycleEvent()`](../../../../dolphinscheduler-worker/src/main/java/org/apache/dolphinscheduler/server/worker/rpc/PhysicalTaskExecutorOperatorImpl.java)
+
+#### 11.5.7 事件驱动的优势总结
+
+| 优势 | 说明 |
+|------|------|
+| **解耦设计** | 系统级事件（WorkerFailoverEvent）与任务级事件（TaskFailoverLifecycleEvent）完全解耦 |
+| **状态机模式** | 通过StateAction实现状态机模式，不同状态对应不同的处理逻辑 |
+| **策略模式** | Handler使用策略模式匹配事件类型，支持扩展新的Handler |
+| **异步处理** | 事件处理是异步的，不阻塞主流程 |
+| **最终一致性** | Worker端事件报告采用重试机制，保证最终一致性 |
+| **可观测性** | 通过事件流转可以清晰地追踪故障转移的完整过程 |
+
+### 11.6 事件驱动架构的优势
+
+| 优势 | 说明 |
+|------|------|
+| **解耦** | 监控层（ClusterStateMonitors）与处理层（FailoverCoordinator）完全解耦，通过事件总线通信 |
+| **延迟执行** | 支持延迟事件（30秒延迟），避免网络抖动导致的误触发 |
+| **异步处理** | 事件处理是异步的，不阻塞主线程 |
+| **可扩展性** | 通过添加新的 Handler 可以轻松扩展处理逻辑 |
+| **策略模式** | 使用策略模式匹配 Handler，支持一个事件类型对应多个处理器 |
+| **自动排序** | DelayQueue 自动按过期时间排序，最早到期的事件优先处理 |
+| **线程安全** | 所有操作都是线程安全的，支持并发发布和消费 |
+| **错误恢复** | 如果处理失败，事件会被重新放回队列，确保事件不丢失 |
+
+### 11.7 与其他系统事件的对比
+
+| 事件类型 | 触发时机 | 延迟时间 | Handler | 处理范围 |
+|---------|---------|---------|---------|---------|
+| **GlobalMasterFailoverEvent** | MasterServer启动时 | 0毫秒 | GlobalMasterFailoverEventHandler | 扫描所有需要故障转移的Master |
+| **MasterFailoverEvent** | 检测到Master移除 | 30秒 | MasterFailoverEventHandler | 特定Master的工作流 |
+| **WorkerFailoverEvent** | 检测到Worker移除 | 30秒 | WorkerFailoverEventHandler | 特定Worker的任务 |
+
+**关键区别**：
+- `GlobalMasterFailoverEvent`：系统启动时主动扫描，无延迟
+- `MasterFailoverEvent` 和 `WorkerFailoverEvent`：被动检测，30秒延迟避免误触发
+
+## 12. 关键设计点
+
+### 12.1 延迟确认机制
 
 **设计原因**：
 - 避免网络抖动导致的误触发
@@ -1075,7 +1801,7 @@ graph TB
 **代码位置**：
 - 延迟发布：[`ClusterStateMonitors#workerRemoved()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/cluster/ClusterStateMonitors.java#L171-L175)
 
-### 10.2 试探性接管机制
+### 12.2 试探性接管机制
 
 **设计原因**：
 - 确认 Worker 是否真的故障
@@ -1092,7 +1818,7 @@ graph TB
 - 接管尝试：[`TaskExecutionRunnable#takeOverTaskFromExecutor()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/TaskExecutionRunnable.java#L410-L422)
 - RPC 调用：[`PhysicalTaskExecutorClientDelegator#reassignMasterHost()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/client/PhysicalTaskExecutorClientDelegator.java#L107-L159)
 
-### 10.3 内存隔离并发控制
+### 12.3 内存隔离并发控制
 
 **设计原因**：
 - 多个 Master 可能同时检测到 Worker 故障
@@ -1109,7 +1835,7 @@ graph TB
 - 内存查询：[`FailoverCoordinator#getFailoverTaskForWorker()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/failover/FailoverCoordinator.java#L430-L431)
 - 原任务标记：[`FailoverTaskInstanceFactory#createTaskInstance()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/FailoverTaskInstanceFactory.java#L65-L67)
 
-### 10.4 任务状态过滤
+### 12.4 任务状态过滤
 
 **设计原因**：
 - 只故障转移正在执行的任务
@@ -1123,7 +1849,7 @@ graph TB
 **代码位置**：
 - 状态过滤：[`FailoverCoordinator#getFailoverTaskForWorker()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/failover/FailoverCoordinator.java#L426-L429)
 
-### 10.5 任务实例克隆与标记
+### 12.5 任务实例克隆与标记
 
 **设计原因**：
 - 保留原任务实例的历史信息
@@ -1145,14 +1871,14 @@ graph TB
 **代码位置**：
 - 实例创建：[`FailoverTaskInstanceFactory#createTaskInstance()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/FailoverTaskInstanceFactory.java#L47-L69)
 
-## 12. 关键代码链接
+## 13. 关键代码链接
 
-### 11.1 故障检测
+### 13.1 故障检测
 
 - **ClusterStateMonitors**: [`ClusterStateMonitors.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/cluster/ClusterStateMonitors.java)
   - `workerRemoved()`: [第171行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/cluster/ClusterStateMonitors.java#L171-L175)
 
-### 11.2 故障转移处理
+### 13.2 故障转移处理
 
 - **WorkerFailoverEventHandler**: [`WorkerFailoverEventHandler.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/system/event/WorkerFailoverEventHandler.java)
   - `handle()`: [第35-36行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/system/event/WorkerFailoverEventHandler.java#L35-L36)
@@ -1162,7 +1888,7 @@ graph TB
   - `doWorkerFailover()`: [第370-401行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/failover/FailoverCoordinator.java#L370-L401)
   - `getFailoverTaskForWorker()`: [第420-457行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/failover/FailoverCoordinator.java#L420-L457)
 
-### 11.3 任务故障转移
+### 13.3 任务故障转移
 
 - **TaskFailover**: [`TaskFailover.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/failover/TaskFailover.java)
   - `failoverTask()`: [第29-33行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/failover/TaskFailover.java#L29-L33)
@@ -1170,7 +1896,7 @@ graph TB
 - **TaskFailoverLifecycleEventHandler**: [`TaskFailoverLifecycleEventHandler.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/handler/TaskFailoverLifecycleEventHandler.java)
   - `handle()`: [第32-37行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/lifecycle/handler/TaskFailoverLifecycleEventHandler.java#L32-L37)
 
-### 11.4 任务状态处理
+### 13.4 任务状态处理
 
 - **TaskRunningStateAction**: [`TaskRunningStateAction.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/statemachine/TaskRunningStateAction.java)
   - `failoverEventAction()`: [第133-139行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/statemachine/TaskRunningStateAction.java#L133-L139)
@@ -1178,14 +1904,14 @@ graph TB
 - **AbstractTaskStateAction**: [`AbstractTaskStateAction.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/statemachine/AbstractTaskStateAction.java)
   - `failoverTask()`: [第225-227行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/statemachine/AbstractTaskStateAction.java#L225-L227)
 
-### 11.5 任务接管与重建
+### 13.5 任务接管与重建
 
 - **TaskExecutionRunnable**: [`TaskExecutionRunnable.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/TaskExecutionRunnable.java)
   - `failover()`: [第294-334行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/TaskExecutionRunnable.java#L294-L334)
   - `takeOverTaskFromExecutor()`: [第410-422行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/TaskExecutionRunnable.java#L410-L422)
   - `initializeTaskExecutionContext()`: [第399-414行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/TaskExecutionRunnable.java#L399-L414)
 
-### 11.6 客户端调用
+### 13.6 客户端调用
 
 - **TaskExecutorClient**: [`TaskExecutorClient.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/client/TaskExecutorClient.java)
   - `reassignWorkflowInstanceHost()`: [第64-73行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/client/TaskExecutorClient.java#L64-L73)
@@ -1194,12 +1920,12 @@ graph TB
   - `reassignMasterHost()`: [第107-159行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/client/PhysicalTaskExecutorClientDelegator.java#L107-L159)
   - `dispatch()`: [第65-96行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/client/PhysicalTaskExecutorClientDelegator.java#L65-L96)
 
-### 11.7 任务实例工厂
+### 13.7 任务实例工厂
 
 - **FailoverTaskInstanceFactory**: [`FailoverTaskInstanceFactory.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/FailoverTaskInstanceFactory.java)
   - `createTaskInstance()`: [第47-69行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/FailoverTaskInstanceFactory.java#L47-L69)
 
-## 13. 总结
+## 14. 总结
 
 Worker 故障容错机制是 DolphinScheduler 高可用性的重要保障。通过延迟确认、试探性接管、内存隔离、状态过滤等设计，实现了高效、可靠的故障转移。
 
