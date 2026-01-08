@@ -619,7 +619,344 @@ stateDiagram-v2
     end note
 ```
 
-## 9. 场景分析与处理方案
+## 9. 标记为需要故障转移的条件和流程
+
+### 9.1 需要故障转移的任务状态
+
+根据 `FailoverCoordinator.getFailoverTaskForWorker()` 方法的过滤条件，以下状态的 Task 需要故障转移：
+
+| 状态码 | 状态名称 | 说明 |
+|--------|---------|------|
+| 17 | DISPATCH | 任务已分派到 Worker，但尚未开始执行 |
+| 1 | RUNNING_EXECUTION | 任务正在 Worker 上执行中 |
+
+**判断逻辑**：
+- 这些状态都是**非终态**（未完成）状态
+- 如果 Worker 故障，这些任务无法继续执行，需要被故障转移
+- **已完成或失败的任务**（如 `SUCCESS`、`FAILURE`、`KILLED`、`PAUSED`）不需要故障转移
+
+**代码位置**：
+- 状态过滤：[`FailoverCoordinator#getFailoverTaskForWorker()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/failover/FailoverCoordinator.java#L443-L446)
+
+### 9.2 任务故障转移判断流程
+
+```mermaid
+sequenceDiagram
+    participant FC as FailoverCoordinator
+    participant WR as WorkflowRepository
+    participant WEG as WorkflowExecutionGraph
+    participant TER as ITaskExecutionRunnable
+    participant TI as TaskInstance
+    participant TF as TaskFailover
+    participant WER as WorkflowEventBus
+    
+    Note over FC,WER: 步骤1: 从内存中获取所有工作流
+    FC->>WR: getAll()
+    WR-->>FC: List<IWorkflowExecutionRunnable>
+    
+    Note over FC,WER: 步骤2: 对每个工作流获取其执行图
+    loop 每个工作流
+        FC->>WEG: getWorkflowExecutionGraph()
+        WEG-->>FC: WorkflowExecutionGraph
+        
+        Note over FC,WER: 步骤3: 获取所有活跃的任务执行 Runnable
+        FC->>WEG: getActiveTaskExecutionRunnable()
+        WEG-->>FC: List<ITaskExecutionRunnable>
+        
+        loop 每个任务执行 Runnable
+            Note over FC,WER: 步骤4: 过滤符合条件的任务
+            
+            FC->>TER: isTaskInstanceInitialized()
+            TER-->>FC: true/false
+            
+            alt 任务实例未初始化
+                FC->>FC: 跳过此任务<br/>说明任务尚未分派
+            else 任务实例已初始化
+                FC->>TER: getTaskInstance()
+                TER-->>FC: TaskInstance
+                FC->>TI: getHost()
+                TI-->>FC: String host
+                
+                alt host != workerAddress
+                    FC->>FC: 跳过此任务<br/>说明不属于故障 Worker
+                else host == workerAddress
+                    FC->>TI: getState()
+                    TI-->>FC: TaskExecutionStatus state
+                    
+                    alt state != DISPATCH && state != RUNNING_EXECUTION
+                        FC->>FC: 跳过此任务<br/>说明已完成或失败，不需要转移
+                    else state == DISPATCH || state == RUNNING_EXECUTION
+                        FC->>TI: getSubmitTime()
+                        TI-->>FC: Date submitTime
+                        
+                        alt submitTime == null || submitTime >= deadline
+                            FC->>FC: 跳过此任务<br/>说明是在 Worker 故障后提交的
+                        else submitTime < deadline
+                            FC->>FC: 添加到故障转移列表 ✓
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    Note over FC,WER: 步骤5: 对每个需要故障转移的任务执行故障转移
+    loop 每个需要故障转移的任务
+        FC->>TF: failoverTask(taskExecutionRunnable)
+        TF->>WER: publish(TaskFailoverLifecycleEvent)
+        WER->>WER: 事件分发到 WorkflowEventBus
+    end
+```
+
+### 9.3 关键判断条件说明
+
+**1. 任务实例初始化检查（isTaskInstanceInitialized）**
+```java
+// FailoverCoordinator.getFailoverTaskForWorker() 第437行
+.filter(ITaskExecutionRunnable::isTaskInstanceInitialized)
+```
+- **目的**：确保任务已经初始化，存在 `TaskInstance`
+- **原因**：只有已初始化的任务才会被分派到 Worker
+- **过滤条件**：如果 `taskInstance == null` 或未初始化，跳过该任务
+
+**2. 主机地址匹配（host == workerAddress）**
+```java
+// FailoverCoordinator.getFailoverTaskForWorker() 第439-440行
+.filter(taskExecutionRunnable -> workerAddress
+        .equals(taskExecutionRunnable.getTaskInstance().getHost()))
+```
+- **目的**：只故障转移分派到故障 Worker 的任务
+- **原因**：其他 Worker 上的任务不受影响，不需要转移
+- **过滤条件**：`taskInstance.getHost()` 必须等于故障 Worker 地址
+
+**3. 任务状态过滤（DISPATCH 或 RUNNING_EXECUTION）**
+```java
+// FailoverCoordinator.getFailoverTaskForWorker() 第443-446行
+.filter(taskExecutionRunnable -> {
+    final TaskExecutionStatus state = taskExecutionRunnable.getTaskInstance().getState();
+    return state == TaskExecutionStatus.DISPATCH || state == TaskExecutionStatus.RUNNING_EXECUTION;
+})
+```
+- **目的**：只故障转移正在执行或已分派但未完成的任务
+- **原因**：
+  - `DISPATCH`：任务已分派但尚未开始执行
+  - `RUNNING_EXECUTION`：任务正在执行中
+  - `SUCCESS`、`FAILURE`、`KILLED`、`PAUSED`：已完成或失败，不需要转移
+- **过滤条件**：状态必须是 `DISPATCH` 或 `RUNNING_EXECUTION`
+
+**4. 提交时间判断（submitTime < deadline）**
+```java
+// FailoverCoordinator.getFailoverTaskForWorker() 第449-452行
+.filter(taskExecutionRunnable -> {
+    final Date submitTime = taskExecutionRunnable.getTaskInstance().getSubmitTime();
+    return submitTime != null && submitTime.before(taskFailoverDeadline);
+})
+```
+- **目的**：只故障转移在 Worker 故障时间点**之前**提交的任务
+- **原因**：在 Worker 故障后提交的任务可能状态异常，不应该被故障转移
+- **过滤条件**：`submitTime != null` 且 `submitTime < taskFailoverDeadline`
+- **deadline 计算**：
+  - 如果 Worker 已重连：使用 Worker 的启动时间
+  - 如果 Worker 未重连：使用故障事件的时间（30秒延迟后的时间）
+
+**5. 内存隔离检查（workflowRepository.getAll()）**
+```java
+// FailoverCoordinator.getFailoverTaskForWorker() 第430行
+return workflowRepository.getAll()
+```
+- **目的**：每个 Master 只处理自己内存中的任务
+- **原因**：
+  - 每个 Master 只管理自己负责的工作流实例
+  - 通过内存隔离实现并发控制，而不是分布式锁
+- **过滤条件**：只查询当前 Master 内存中的工作流
+
+**代码位置**：
+- 完整过滤逻辑：[`FailoverCoordinator#getFailoverTaskForWorker()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/failover/FailoverCoordinator.java#L420-L454)
+
+### 9.4 任务故障转移的完整生命周期
+
+```mermaid
+stateDiagram-v2
+    [*] --> SUBMITTED_SUCCESS: 任务提交
+    SUBMITTED_SUCCESS --> DISPATCH: Master分派到Worker
+    
+    DISPATCH --> RUNNING_EXECUTION: Worker开始执行
+    RUNNING_EXECUTION --> Worker故障检测: Worker节点移除
+    
+    Worker故障检测 --> 延迟确认: 30秒延迟
+    延迟确认 --> Worker恢复: Worker重新连接<br/>（跳过故障转移）
+    延迟确认 --> 任务故障转移: Worker未恢复
+    
+    任务故障转移 --> 尝试接管任务: reassignMasterHost
+    尝试接管任务 --> 接管成功: RPC调用成功
+    尝试接管任务 --> 接管失败: RPC调用失败
+    
+    接管成功 --> RUNNING_EXECUTION: 任务继续执行<br/>（无需重建）
+    
+    接管失败 --> 创建故障转移实例: FailoverTaskInstanceFactory
+    创建故障转移实例 --> 原任务标记: NEED_FAULT_TOLERANCE
+    创建故障转移实例 --> 新任务创建: SUBMITTED_SUCCESS
+    
+    新任务创建 --> 重新分发: TaskStartLifecycleEvent
+    重新分发 --> DISPATCH: 分派到新Worker
+    DISPATCH --> RUNNING_EXECUTION: 新Worker开始执行
+    
+    RUNNING_EXECUTION --> SUCCESS: 执行成功
+    RUNNING_EXECUTION --> FAILURE: 执行失败
+    RUNNING_EXECUTION --> KILLED: 被终止
+    
+    SUCCESS --> [*]
+    FAILURE --> [*]
+    KILLED --> [*]
+    原任务标记 --> [*]
+    Worker恢复 --> RUNNING_EXECUTION
+    
+    note right of 任务故障转移
+        故障转移状态
+        1. 发布TaskFailoverLifecycleEvent
+        2. 尝试接管任务
+        3. 如果接管失败，创建新实例
+    end note
+    
+    note right of 创建故障转移实例
+        原任务实例：state=NEED_FAULT_TOLERANCE
+        新任务实例：state=SUBMITTED_SUCCESS, host=null
+    end note
+```
+
+### 9.5 故障转移触发场景总结
+
+| 场景 | 触发方式 | 判断条件 | 处理方式 |
+|------|---------|---------|---------|
+| **Worker故障** | WorkerFailoverEvent | 1. 任务实例已初始化<br/>2. host = 故障Worker<br/>3. state == DISPATCH \|\| RUNNING_EXECUTION<br/>4. submitTime < deadline | 发布TaskFailoverLifecycleEvent，尝试接管或重建任务实例 |
+| **Worker重连** | WorkerFailoverEvent延迟检查 | Worker存活且启动时间相同 | 跳过故障转移 |
+| **任务已完成** | 状态过滤 | state != DISPATCH && state != RUNNING_EXECUTION | 跳过故障转移 |
+| **任务未初始化** | 初始化检查 | !isTaskInstanceInitialized() | 跳过故障转移 |
+| **任务不属于故障Worker** | 主机地址过滤 | host != workerAddress | 跳过故障转移 |
+| **任务在故障后提交** | 时间过滤 | submitTime >= deadline | 跳过故障转移 |
+
+### 9.6 Worker 故障转移处理对象与 Master 的区别
+
+#### 9.6.1 处理对象对比
+
+| 故障类型 | 处理对象 | 数据来源 | 处理方式 | 说明 |
+|---------|---------|---------|---------|------|
+| **Master 故障转移** | **工作流实例（WorkflowInstance）** | 数据库查询 | 标记为 FAILOVER，插入恢复 Command | Master 负责工作流的调度和管理 |
+| **Worker 故障转移** | **任务实例（TaskInstance）** | 内存中运行的任务 | 发布 TaskFailoverLifecycleEvent | Worker 只负责执行任务 |
+
+#### 9.6.2 Master 故障转移处理工作流的原因
+
+**Master 的职责**：
+- Master 负责工作流的**调度、管理和监控**
+- 工作流实例存储在数据库中，由 Master 负责维护其生命周期
+- 当 Master 故障时，其负责的所有工作流都需要被其他 Master 接管
+
+**处理流程**：
+1. **查询工作流**：从数据库查询该 Master 负责的所有未完成的工作流
+   ```java
+   // FailoverCoordinator.getFailoverWorkflowsForMaster()
+   workflowInstanceDao.queryNeedFailoverWorkflowInstances(masterAddress)
+   ```
+
+2. **标记工作流**：将工作流状态更新为 `FAILOVER`
+   ```java
+   // WorkflowFailover.failoverWorkflow()
+   workflowInstanceDao.updateWorkflowInstanceState(id, originalState, FAILOVER)
+   ```
+
+3. **插入恢复命令**：插入 `RECOVER_TOLERANCE_FAULT_PROCESS` 类型的 Command
+   ```java
+   // WorkflowFailover.failoverWorkflow()
+   commandDao.insert(Command.builder()
+       .commandType(RECOVER_TOLERANCE_FAULT_PROCESS)
+       .workflowInstanceId(workflowInstance.getId())
+       .build())
+   ```
+
+4. **后续处理**：CommandEngine 会处理恢复命令，重新调度工作流执行
+   - 工作流恢复后，其中的任务会重新被调度到可用的 Worker 执行
+   - **任务实例的故障转移在工作流恢复时自动处理**
+
+#### 9.6.3 Worker 故障转移只处理任务的原因
+
+**Worker 的职责**：
+- Worker 只负责**执行任务**，不管理工作流
+- 任务实例在内存中运行，由 Master 监控和管理
+- 当 Worker 故障时，只需要将该 Worker 正在执行的任务转移到其他 Worker
+
+**处理流程**：
+1. **查询任务**：从内存中查询该 Worker 正在执行的所有任务
+   ```java
+   // FailoverCoordinator.getFailoverTaskForWorker()
+   workflowRepository.getAll()
+       .stream()
+       .flatMap(graph -> graph.getActiveTaskExecutionRunnable().stream())
+       .filter(task -> workerAddress.equals(task.getTaskInstance().getHost()))
+       .filter(task -> task.getState() == DISPATCH || task.getState() == RUNNING_EXECUTION)
+   ```
+
+2. **发布任务故障转移事件**：为每个任务发布 `TaskFailoverLifecycleEvent`
+   ```java
+   // TaskFailover.failoverTask()
+   taskExecutionRunnable.getWorkflowEventBus().publish(TaskFailoverLifecycleEvent.of(taskExecutionRunnable))
+   ```
+
+3. **任务重新调度**：任务状态机处理故障转移事件，将任务重新调度到其他 Worker
+   - 任务会重新进入调度队列，等待分配到可用的 Worker
+   - **工作流不受影响，继续运行**
+
+#### 9.6.4 为什么 Master 故障转移不直接处理任务？
+
+**原因分析**：
+
+1. **工作流是管理单元**：
+   - 工作流是任务的组织单元，Master 管理的是工作流级别
+   - 工作流故障转移后，其中的任务会在工作流恢复时自动重新调度
+
+2. **数据一致性**：
+   - 工作流状态存储在数据库中，需要统一管理
+   - 如果直接处理任务，可能导致工作流状态不一致
+
+3. **恢复粒度**：
+   - 工作流级别的恢复可以保证整个工作流的完整性
+   - 任务级别的恢复可能无法保证工作流的状态一致性
+
+4. **简化设计**：
+   - 工作流恢复时，CommandEngine 会重新解析 DAG 并调度任务
+   - 这样可以确保任务调度的正确性和一致性
+
+#### 9.6.5 总结
+
+```mermaid
+graph TB
+    subgraph "Master故障转移"
+        A[Master故障] --> B[查询工作流实例]
+        B --> C[标记工作流为FAILOVER]
+        C --> D[插入恢复Command]
+        D --> E[CommandEngine处理]
+        E --> F[重新调度工作流]
+        F --> G[工作流中的任务自动重新调度]
+    end
+    
+    subgraph "Worker故障转移"
+        H[Worker故障] --> I[查询任务实例]
+        I --> J[发布TaskFailoverLifecycleEvent]
+        J --> K[任务状态机处理]
+        K --> L[任务重新调度到其他Worker]
+        L --> M[工作流继续运行]
+    end
+    
+    style A fill:#ffcccc
+    style H fill:#ccffcc
+    style C fill:#ffffcc
+    style J fill:#ffffcc
+```
+
+**关键区别**：
+- **Master 故障转移**：工作流级别 → 数据库持久化 → 通过 Command 恢复 → 任务自动重新调度
+- **Worker 故障转移**：任务级别 → 内存中处理 → 直接重新调度 → 工作流不受影响
+
+## 10. 场景分析与处理方案
 
 ### 9.1 场景1：网络抖动导致临时断开
 
@@ -721,7 +1058,7 @@ stateDiagram-v2
 **代码位置**：
 - 资源释放：[`FailoverTaskInstanceFactory#createTaskInstance()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/FailoverTaskInstanceFactory.java#L61-L63)
 
-## 10. 关键设计点
+## 11. 关键设计点
 
 ### 10.1 延迟确认机制
 
@@ -808,7 +1145,7 @@ stateDiagram-v2
 **代码位置**：
 - 实例创建：[`FailoverTaskInstanceFactory#createTaskInstance()`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/FailoverTaskInstanceFactory.java#L47-L69)
 
-## 11. 关键代码链接
+## 12. 关键代码链接
 
 ### 11.1 故障检测
 
@@ -862,7 +1199,7 @@ stateDiagram-v2
 - **FailoverTaskInstanceFactory**: [`FailoverTaskInstanceFactory.java`](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/FailoverTaskInstanceFactory.java)
   - `createTaskInstance()`: [第47-69行](../../../../dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/engine/task/runnable/FailoverTaskInstanceFactory.java#L47-L69)
 
-## 12. 总结
+## 13. 总结
 
 Worker 故障容错机制是 DolphinScheduler 高可用性的重要保障。通过延迟确认、试探性接管、内存隔离、状态过滤等设计，实现了高效、可靠的故障转移。
 
