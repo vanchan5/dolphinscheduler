@@ -43,6 +43,8 @@ public class SystemEventBus extends AbstractDelayEventBus<AbstractSystemEvent> {
     /**
      * 🌟DelayQueue.take()工作原理🌟
      *
+     * 阻塞等待，直到有元素到期
+     *
      * DelayQueue`内部使用`PriorityQueue`按过期时间排序
      * - `take()`方法会：
      *   1. 获取队列头部元素

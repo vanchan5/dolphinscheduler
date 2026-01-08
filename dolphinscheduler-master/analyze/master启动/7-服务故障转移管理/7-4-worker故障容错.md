@@ -1467,26 +1467,26 @@ graph TB
         FTIF[FailoverTaskInstanceFactory]
     end
     
-    WFE -->|30秒后| WFH
-    WFH -->|failoverWorker| FC
-    FC -->|failoverTask| TFE
-    TFE -->|匹配Handler| TFH
-    TFH -->|failoverEventAction| TRSA
-    TRSA -->|failover| TER
-    TER -->|takeOver失败| FTIF
-    TER -->|创建新实例| TSE
-    TSE -->|匹配Handler| TSH
-    TSH -->|startEventAction| TSUSA
-    TSUSA -->|tryToDispatchTask| TDE
-    TDE -->|匹配Handler| TDH
-    TDH -->|dispatchEventAction| TSUSA
-    TSUSA -->|dispatchTask| TDSE
-    TDSE -->|Worker报告| TDSH
-    TDSH -->|dispatchedEventAction| TDSA
-    TDSE -->|Worker执行| TRE
-    TRE -->|Worker报告| TRH
-    TRE -->|任务完成| TSUCE
-    TSUCE -->|Worker报告| TSUCH
+    WFE -->|① 30秒后| WFH
+    WFH -->|② failoverWorker| FC
+    FC -->|③ failoverTask| TFE
+    TFE -->|④ 匹配Handler| TFH
+    TFH -->|⑤ failoverEventAction| TRSA
+    TRSA -->|⑥ failover| TER
+    TER -->|⑦ takeOver失败| FTIF
+    TER -->|⑧ 创建新实例| TSE
+    TSE -->|⑨ 匹配Handler| TSH
+    TSH -->|⑩ startEventAction| TSUSA
+    TSUSA -->|⑪ tryToDispatchTask| TDE
+    TDE -->|⑫ 匹配Handler| TDH
+    TDH -->|⑬ dispatchEventAction| TSUSA
+    TSUSA -->|⑭ dispatchTask| TDSE
+    TDSE -->|⑮ Worker报告| TDSH
+    TDSH -->|⑯ dispatchedEventAction| TDSA
+    TDSE -->|⑰ Worker执行| TRE
+    TRE -->|⑱ Worker报告| TRH
+    TRE -->|⑲ 任务完成| TSUCE
+    TSUCE -->|⑳ Worker报告| TSUCH
 ```
 
 #### 11.5.2 完整事件流转时序图

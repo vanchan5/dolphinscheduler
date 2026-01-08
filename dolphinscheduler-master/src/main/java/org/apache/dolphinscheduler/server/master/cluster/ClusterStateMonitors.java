@@ -124,6 +124,8 @@ public class ClusterStateMonitors {
      *     ↓
      * 发布 WorkerFailoverEvent {@link WorkerFailoverEvent#of(WorkerServerMetadata, Date, long)}
      *     ↓
+     * 系统事件handler {@link SystemEventBusFireWorker#run()}
+     *     ↓
      * WorkerFailoverEventHandler.handle() {@link WorkerFailoverEventHandler}
      *     ↓
      * FailoverCoordinator.failoverWorker() {@link FailoverCoordinator#failoverWorker(WorkerFailoverEvent)}
