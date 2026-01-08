@@ -64,6 +64,12 @@ public class GlobalTaskDispatchWaitingQueueLooper extends BaseDaemonThread imple
         super("GlobalTaskDispatchWaitingQueueLooper");
     }
 
+    /**
+     * 获取锁，如果锁已被占用则自旋等待
+     * CAS操作：如果RUNNING_FLAG为false，则设置为true并返回true
+     * 如果RUNNING_FLAG为true，则返回false
+     *
+     */
     @Override
     public synchronized void start() {
         if (!RUNNING_FLAG.compareAndSet(false, true)) {
@@ -125,6 +131,10 @@ public class GlobalTaskDispatchWaitingQueueLooper extends BaseDaemonThread imple
         }
     }
 
+    /**
+     * 释放锁
+     * 将locked设置为false，允许其他线程获取锁
+     */
     @Override
     public void close() throws Exception {
         if (RUNNING_FLAG.compareAndSet(true, false)) {

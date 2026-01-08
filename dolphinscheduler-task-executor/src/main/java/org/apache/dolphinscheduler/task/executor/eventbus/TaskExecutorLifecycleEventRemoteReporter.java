@@ -183,6 +183,8 @@ public class TaskExecutorLifecycleEventRemoteReporter extends BaseDaemonThread
      * 事件通道操作的锁
      * <p>
      * 用于保护 {@code eventChannels} 的并发访问，以及实现条件等待机制。
+     * 锁不区分调用位置,它只关心哪个线程持有锁、等待队列中的线程
+     * 锁的粒度：整个 `ReentrantLock` 实例是一个锁，所有调用 `lock()` 的地方都竞争同一个锁
      * </p>
      */
     private final Lock eventChannelsLock = new ReentrantLock();
