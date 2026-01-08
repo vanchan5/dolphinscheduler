@@ -131,15 +131,17 @@ public class ClusterStateMonitors {
      * FailoverCoordinator.doWorkerFailover() {@link FailoverCoordinator#doWorkerFailover(String, long, String)}
      *     ↓
      * 获取该 Worker 上的任务列表 (getFailoverTaskForWorker) {@link FailoverCoordinator#getFailoverTaskForWorker(String, Date)}
-     *     ↓
+     *
+     *     ↓ 1. host == workerAddress
+     *     ↓ 2. 只处理状态为 DISPATCH 或 RUNNING_EXECUTION 的任务
+     *     ↓ 3. submitTime < deadline
+     *
      * TaskFailover.failoverTask()  // 对每个任务 {@link TaskFailover#failoverTask(ITaskExecutionRunnable)}
      *     ↓
      * 发布 TaskFailoverLifecycleEvent {@link TaskFailoverLifecycleEvent}
      *     ↓
      * TaskFailoverLifecycleEventHandler.handle() {@link TaskFailoverLifecycleEventHandler}
-     *
-     *     ↓ 只处理状态为 DISPATCH 或 RUNNING_EXECUTION 的任务
-     *
+     *     ↓
      * TaskRunningStateAction.failoverEventAction() {@link TaskRunningStateAction#failoverEventAction(IWorkflowExecutionRunnable, ITaskExecutionRunnable, TaskFailoverLifecycleEvent)}
      *     ↓
      * AbstractTaskStateAction.failoverTask() {@link AbstractTaskStateAction#failoverTask(ITaskExecutionRunnable)}
