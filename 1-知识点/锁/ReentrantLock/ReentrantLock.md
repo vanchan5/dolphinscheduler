@@ -3073,67 +3073,7 @@ sequenceDiagram
     Note over T1: 问题：队列已有元素，<br/>但T1在等待，信号丢失
 ```
 
-##### 7.4.4.4 代码验证
-
-```java
-public class ConditionExample {
-    private final ReentrantLock lock = new ReentrantLock();
-    private final Condition condition = lock.newCondition();
-    private Queue<String> queue = new LinkedList<>();
-    
-    // ✅ 正确：await前持有锁
-    public void correctAwait() throws InterruptedException {
-        lock.lock();
-        try {
-            while (queue.isEmpty()) {
-                condition.await();  // 原子地释放锁并等待
-            }
-        } finally {
-            lock.unlock();
-        }
-    }
-    
-    // ❌ 错误：await前没有持有锁
-    public void incorrectAwait() throws InterruptedException {
-        // 没有获取锁
-        while (queue.isEmpty()) {
-            condition.await();  // 抛出 IllegalMonitorStateException
-        }
-    }
-    
-    // ✅ 正确：signal前持有锁
-    public void correctSignal() {
-        lock.lock();
-        try {
-            queue.offer("item");
-            condition.signal();  // 原子地修改状态并唤醒
-        } finally {
-            lock.unlock();
-        }
-    }
-    
-    // ❌ 错误：signal前没有持有锁
-    public void incorrectSignal() {
-        queue.offer("item");
-        condition.signal();  // 抛出 IllegalMonitorStateException
-    }
-}
-```
-
-##### 7.4.4.5 总结
-
-| 方法 | 为什么必须先持有锁 | 如果不持有锁会怎样 |
-|------|------------------|------------------|
-| **await()** | 1. 原子地检查条件状态和进入等待<br>2. 原子地释放锁并加入条件队列<br>3. 防止竞态条件和丢失信号 | 抛出 `IllegalMonitorStateException`<br>或出现竞态条件 |
-| **signal()** | 1. 原子地修改条件状态和唤醒线程<br>2. 确保状态一致性<br>3. 防止丢失信号 | 抛出 `IllegalMonitorStateException`<br>或导致状态不一致 |
-
-**核心原则：**
-- **await()** 和 **signal()** 必须在持有锁的情况下调用
-- 这保证了条件检查和等待/唤醒操作的原子性
-- 这确保了共享状态的一致性
-- 这防止了竞态条件和信号丢失
-
-##### 7.4.4.6 await() 和 signal() 必须使用同一把锁
+##### 7.4.4.4 await() 和 signal() 必须使用同一把锁
 
 **关键点：await() 和 signal() 不仅必须先持有锁，还必须使用同一把锁！**
 
@@ -3388,6 +3328,66 @@ Thread4 持有 lock2，准备 signal         // ❌ IllegalMonitorStateException
 2. `await()` 和 `signal()` 都必须持有创建 Condition 的同一个锁
 3. 不同锁创建的 Condition 不能混用
 4. 这是 Condition 机制正确工作的基础要求
+
+##### 7.4.4.5 代码验证
+
+```java
+public class ConditionExample {
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition condition = lock.newCondition();
+    private Queue<String> queue = new LinkedList<>();
+    
+    // ✅ 正确：await前持有锁
+    public void correctAwait() throws InterruptedException {
+        lock.lock();
+        try {
+            while (queue.isEmpty()) {
+                condition.await();  // 原子地释放锁并等待
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+    
+    // ❌ 错误：await前没有持有锁
+    public void incorrectAwait() throws InterruptedException {
+        // 没有获取锁
+        while (queue.isEmpty()) {
+            condition.await();  // 抛出 IllegalMonitorStateException
+        }
+    }
+    
+    // ✅ 正确：signal前持有锁
+    public void correctSignal() {
+        lock.lock();
+        try {
+            queue.offer("item");
+            condition.signal();  // 原子地修改状态并唤醒
+        } finally {
+            lock.unlock();
+        }
+    }
+    
+    // ❌ 错误：signal前没有持有锁
+    public void incorrectSignal() {
+        queue.offer("item");
+        condition.signal();  // 抛出 IllegalMonitorStateException
+    }
+}
+```
+
+##### 7.4.4.6 总结
+
+| 方法 | 为什么必须先持有锁 | 如果不持有锁会怎样 |
+|------|------------------|------------------|
+| **await()** | 1. 原子地检查条件状态和进入等待<br>2. 原子地释放锁并加入条件队列<br>3. 防止竞态条件和丢失信号 | 抛出 `IllegalMonitorStateException`<br>或出现竞态条件 |
+| **signal()** | 1. 原子地修改条件状态和唤醒线程<br>2. 确保状态一致性<br>3. 防止丢失信号 | 抛出 `IllegalMonitorStateException`<br>或导致状态不一致 |
+
+**核心原则：**
+- **await()** 和 **signal()** 必须在持有锁的情况下调用
+- 这保证了条件检查和等待/唤醒操作的原子性
+- 这确保了共享状态的一致性
+- 这防止了竞态条件和信号丢失
 
 ### 7.5 关键要点总结
 
