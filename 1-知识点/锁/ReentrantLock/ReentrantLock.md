@@ -2316,7 +2316,1394 @@ graph TB
     style Condition2 fill:#fff9c4
 ```
 
-### 7.2 await() 和 signal() 流程
+### 7.2 await() 方法详解
+
+#### 7.2.1 await() 的核心原理
+
+`await()` 方法的主要作用是：**释放当前持有的锁，将当前线程加入到条件队列中等待，直到被 signal() 唤醒。**
+
+**关键理解：**
+- `await()` 必须在持有锁的情况下调用（否则抛出 `IllegalMonitorStateException`）
+- 调用 `await()` 会**完全释放锁**（即使有重入，也会全部释放）
+- 线程会从**同步队列（CLH队列）**转移到**条件队列**中
+- 被唤醒后，线程会重新尝试获取锁
+
+#### 7.2.2 await() 的完整流程
+
+```java
+public final void await() throws InterruptedException {
+    if (Thread.interrupted())
+        throw new InterruptedException();
+    
+    // 1. 创建条件节点，加入条件队列
+    Node node = addConditionWaiter();
+    
+    // 2. 完全释放锁（包括所有重入）
+    int savedState = fullyRelease(node);
+    int interruptMode = 0;
+    
+    // 3. 循环检查节点是否在同步队列中
+    while (!isOnSyncQueue(node)) {
+        // 4. 如果不在同步队列，说明还在条件队列中，阻塞等待
+        LockSupport.park(this);
+        
+        // 5. 检查是否被中断
+        if ((interruptMode = checkInterruptWhileWaiting(node)) != 0)
+            break;
+    }
+    
+    // 6. 节点已被转移到同步队列，尝试获取锁
+    if (acquireQueued(node, savedState) && interruptMode != THROW_IE)
+        interruptMode = REINTERRUPT;
+    
+    // 7. 清理已取消的节点
+    if (node.nextWaiter != null)
+        unlinkCancelledWaiters();
+    
+    // 8. 处理中断
+    if (interruptMode != 0)
+        reportInterruptAfterWait(interruptMode);
+}
+```
+
+#### 7.2.3 await() 详细步骤解析
+
+**步骤1：addConditionWaiter() - 创建条件节点**
+
+```java
+private Node addConditionWaiter() {
+    Node t = lastWaiter;
+    // 清理已取消的节点
+    if (t != null && t.waitStatus != Node.CONDITION) {
+        unlinkCancelledWaiters();
+        t = lastWaiter;
+    }
+    
+    // 创建新节点，waitStatus = CONDITION
+    Node node = new Node(Thread.currentThread(), Node.CONDITION);
+    
+    if (t == null)
+        firstWaiter = node;
+    else
+        t.nextWaiter = node;
+    lastWaiter = node;
+    
+    return node;
+}
+```
+
+**步骤2：fullyRelease() - 完全释放锁**
+
+```java
+final int fullyRelease(Node node) {
+    boolean failed = true;
+    try {
+        int savedState = getState();  // 保存当前state（可能 > 1，因为有重入）
+        
+        // 完全释放锁（即使state > 1，也释放到0）
+        if (release(savedState)) {
+            failed = false;
+            return savedState;  // 返回保存的state，用于后续重新获取锁
+        } else {
+            throw new IllegalMonitorStateException();
+        }
+    } finally {
+        if (failed)
+            node.waitStatus = Node.CANCELLED;
+    }
+}
+```
+
+**步骤3：isOnSyncQueue() - 检查节点是否在同步队列**
+
+```java
+final boolean isOnSyncQueue(Node node) {
+    // 如果waitStatus是CONDITION，说明还在条件队列中
+    if (node.waitStatus == Node.CONDITION)
+        return false;
+    
+    // 如果有前驱节点，说明已经在同步队列中
+    if (node.prev != null)
+        return true;
+    
+    // 进一步检查（可能正在转移过程中）
+    return findNodeFromTail(node);
+}
+```
+
+#### 7.2.4 await() 完整流程图
+
+```mermaid
+sequenceDiagram
+    participant T1 as Thread1<br/>已持有锁
+    participant Condition as Condition
+    participant AQS as AQS
+    participant CondQueue as 条件队列
+    participant CLHQueue as CLH队列
+    
+    Note over T1: state=2, owner=T1<br/>（重入了1次）
+    
+    T1->>Condition: await()
+    Condition->>Condition: addConditionWaiter()
+    Note over Condition: 创建节点node<br/>waitStatus=CONDITION
+    Condition->>CondQueue: 加入条件队列尾部
+    Note over CondQueue: [T1节点, waitStatus=CONDITION]
+    
+    Condition->>AQS: fullyRelease(node)
+    Note over AQS: savedState = 2<br/>（保存重入次数）
+    AQS->>AQS: release(2)
+    AQS->>AQS: tryRelease(2)
+    Note over AQS: state: 2 -> 0<br/>完全释放锁
+    AQS->>AQS: setExclusiveOwnerThread(null)
+    AQS->>CLHQueue: unparkSuccessor(head)
+    Note over CLHQueue: 唤醒等待队列中的线程
+    
+    Condition->>AQS: isOnSyncQueue(node)?
+    Note over AQS: node.waitStatus = CONDITION
+    AQS-->>Condition: false（在条件队列中）
+    
+    Condition->>T1: LockSupport.park(this)
+    Note over T1: T1被阻塞<br/>等待signal唤醒
+    
+    Note over CLHQueue: 其他线程可以获取锁了
+```
+
+#### 7.2.5 await() 与 lock() 的区别
+
+| 特性 | lock() | await() |
+|------|--------|---------|
+| **前提条件** | 无（尝试获取锁） | 必须已持有锁 |
+| **队列类型** | 同步队列（CLH队列） | 条件队列 → 同步队列 |
+| **锁释放** | 获取锁（state: 0→1） | 完全释放锁（state: n→0） |
+| **等待原因** | 等待获取锁 | 等待条件满足 |
+| **节点状态** | waitStatus = SIGNAL | waitStatus = CONDITION |
+
+### 7.3 signal() 方法详解
+
+#### 7.3.1 signal() 的核心原理
+
+`signal()` 方法的主要作用是：**将条件队列中的第一个等待节点转移到同步队列中，让该线程有机会重新获取锁。**
+
+**关键理解：**
+- `signal()` 必须在持有锁的情况下调用
+- `signal()` **不会立即唤醒线程**，只是将节点从条件队列转移到同步队列
+- 被转移的线程需要等待当前线程释放锁后，才能尝试获取锁
+- 如果当前线程一直不释放锁，被signal的线程会一直等待
+
+#### 7.3.2 signal() 的完整流程
+
+```java
+public final void signal() {
+    // 1. 检查当前线程是否持有锁
+    if (!isHeldExclusively())
+        throw new IllegalMonitorStateException();
+    
+    // 2. 获取条件队列的第一个节点
+    Node first = firstWaiter;
+    if (first != null)
+        // 3. 转移节点到同步队列
+        doSignal(first);
+}
+
+private void doSignal(Node first) {
+    do {
+        // 从条件队列中移除第一个节点
+        if ((firstWaiter = first.nextWaiter) == null)
+            lastWaiter = null;
+        first.nextWaiter = null;
+    } while (!transferForSignal(first) &&  // 转移节点到同步队列
+             (first = firstWaiter) != null);
+}
+
+final boolean transferForSignal(Node node) {
+    // 1. 尝试将waitStatus从CONDITION改为0
+    if (!compareAndSetWaitStatus(node, Node.CONDITION, 0))
+        return false;  // 节点已被取消
+    
+    // 2. 将节点加入同步队列尾部
+    Node p = enq(node);
+    int ws = p.waitStatus;
+    
+    // 3. 如果前驱节点已取消，或设置SIGNAL失败，立即唤醒
+    if (ws > 0 || !compareAndSetWaitStatus(p, ws, Node.SIGNAL))
+        LockSupport.unpark(node.thread);
+    
+    return true;
+}
+```
+
+#### 7.3.3 signal() 详细步骤解析
+
+**步骤1：获取条件队列的第一个节点**
+
+```java
+Node first = firstWaiter;
+// first 指向条件队列的第一个等待节点
+```
+
+**步骤2：transferForSignal() - 转移节点**
+
+```java
+final boolean transferForSignal(Node node) {
+    // 1. CAS将waitStatus从CONDITION改为0
+    if (!compareAndSetWaitStatus(node, Node.CONDITION, 0))
+        return false;  // 如果失败，说明节点已被取消
+    
+    // 2. 将节点加入同步队列尾部
+    Node p = enq(node);  // p是node的前驱节点
+    
+    // 3. 设置前驱节点的waitStatus = SIGNAL
+    int ws = p.waitStatus;
+    if (ws > 0 || !compareAndSetWaitStatus(p, ws, Node.SIGNAL))
+        // 如果前驱节点已取消，或设置SIGNAL失败，立即唤醒线程
+        LockSupport.unpark(node.thread);
+    
+    return true;
+}
+```
+
+**步骤3：enq() - 加入同步队列**
+
+```java
+private Node enq(final Node node) {
+    for (;;) {
+        Node t = tail;
+        if (t == null) {
+            // 初始化队列
+            if (compareAndSetHead(new Node()))
+                tail = head;
+        } else {
+            node.prev = t;
+            if (compareAndSetTail(t, node)) {
+                t.next = node;
+                return t;  // 返回前驱节点
+            }
+        }
+    }
+}
+```
+
+#### 7.3.4 signal() 完整流程图
+
+```mermaid
+sequenceDiagram
+    participant T2 as Thread2<br/>持有锁
+    participant Condition as Condition
+    participant CondQueue as 条件队列
+    participant AQS as AQS
+    participant CLHQueue as CLH队列
+    participant T1 as Thread1<br/>等待中
+    
+    Note over T2: state=1, owner=T2<br/>持有锁
+    Note over CondQueue: [T1节点, waitStatus=CONDITION]
+    Note over T1: T1在await()中阻塞
+    
+    T2->>Condition: signal()
+    Condition->>Condition: isHeldExclusively()
+    Note over Condition: 检查T2是否持有锁
+    
+    Condition->>CondQueue: 获取firstWaiter = T1节点
+    Condition->>AQS: transferForSignal(T1节点)
+    
+    AQS->>AQS: compareAndSetWaitStatus<br/>(T1节点, CONDITION, 0)
+    Note over AQS: T1节点waitStatus: CONDITION -> 0
+    
+    AQS->>AQS: enq(T1节点)
+    AQS->>CLHQueue: 将T1节点加入同步队列尾部
+    Note over CLHQueue: [head] -> [其他节点] -> [T1节点]
+    
+    AQS->>AQS: 设置前驱节点waitStatus = SIGNAL
+    AQS->>T1: LockSupport.unpark(T1)
+    Note over T1: T1被唤醒<br/>但T2仍持有锁
+    
+    Note over T1: T1继续执行await()中的循环
+    T1->>AQS: isOnSyncQueue(T1节点)?
+    Note over AQS: T1节点.prev != null
+    AQS-->>T1: true（已在同步队列中）
+    
+    T1->>AQS: acquireQueued(T1节点, savedState=2)
+    Note over AQS: T1尝试获取锁<br/>但T2仍持有，会失败
+    
+    Note over T2: T2执行完毕
+    T2->>AQS: unlock() - 释放锁
+    AQS->>AQS: tryRelease(1) - state: 1->0
+    AQS->>AQS: unparkSuccessor(head)
+    AQS->>T1: 唤醒T1（如果T1在队列第一个）
+    
+    T1->>AQS: acquireQueued继续自旋
+    T1->>AQS: tryAcquire(2) - 成功
+    Note over AQS: state=2, owner=T1<br/>恢复重入状态
+    T1->>T1: await()返回，继续执行
+```
+
+#### 7.3.5 signal() 与 notify() 的区别
+
+| 特性 | Object.notify() | Condition.signal() |
+|------|-----------------|-------------------|
+| **立即唤醒** | 是，立即唤醒等待线程 | 否，只是转移到同步队列 |
+| **必须释放锁** | 否，notify后仍持有锁 | 否，signal后仍持有锁 |
+| **唤醒时机** | notify后，等待线程可能立即获取锁 | signal后，需要等待当前线程释放锁 |
+| **精确唤醒** | 否，随机唤醒一个 | 是，FIFO顺序唤醒 |
+
+### 7.4 await() 和 signal() 完整交互流程
+
+#### 7.4.1 完整场景示例
+
+**场景：生产者-消费者模式**
+
+```java
+public class ProducerConsumer {
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition notFull = lock.newCondition();   // 条件队列1
+    private final Condition notEmpty = lock.newCondition();  // 条件队列2
+    private Queue<String> queue = new LinkedList<>();
+    private final int CAPACITY = 10;
+    
+    // 生产者
+    public void produce(String item) throws InterruptedException {
+        lock.lock();
+        try {
+            // 队列满，等待
+            while (queue.size() == CAPACITY) {
+                notFull.await();  // 释放锁，加入notFull条件队列
+            }
+            queue.offer(item);
+            notEmpty.signal();  // 通知消费者
+        } finally {
+            lock.unlock();
+        }
+    }
+    
+    // 消费者
+    public String consume() throws InterruptedException {
+        lock.lock();
+        try {
+            // 队列空，等待
+            while (queue.isEmpty()) {
+                notEmpty.await();  // 释放锁，加入notEmpty条件队列
+            }
+            String item = queue.poll();
+            notFull.signal();  // 通知生产者
+            return item;
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+```
+
+#### 7.4.2 完整交互时序图
+
+```mermaid
+sequenceDiagram
+    participant Producer as 生产者线程
+    participant Consumer as 消费者线程
+    participant Lock as ReentrantLock
+    participant NotFull as notFull条件队列
+    participant NotEmpty as notEmpty条件队列
+    participant CLHQueue as CLH同步队列
+    
+    Note over Producer: 队列已满（size=10）
+    Producer->>Lock: lock() - 获取锁
+    Producer->>Producer: 检查队列size == CAPACITY
+    Producer->>NotFull: await()
+    
+    Note over NotFull: Producer节点加入条件队列<br/>waitStatus=CONDITION
+    NotFull->>Lock: fullyRelease()
+    Note over Lock: state: 1 -> 0<br/>完全释放锁
+    Lock->>CLHQueue: 唤醒等待线程
+    Producer->>Producer: LockSupport.park() - 阻塞
+    
+    Note over Consumer: 队列未满，消费一个元素
+    Consumer->>Lock: lock() - 获取锁成功
+    Consumer->>Consumer: queue.poll() - 消费
+    Consumer->>NotFull: signal()
+    
+    NotFull->>AQS: transferForSignal(Producer节点)
+    AQS->>NotFull: 从条件队列移除Producer节点
+    AQS->>CLHQueue: 将Producer节点加入同步队列尾部
+    AQS->>Producer: LockSupport.unpark() - 唤醒
+    
+    Note over Producer: 被唤醒，但Consumer仍持有锁
+    Producer->>CLHQueue: acquireQueued(Producer节点, savedState)
+    Producer->>Lock: tryAcquire(1) - 失败（Consumer持有）
+    
+    Consumer->>Lock: unlock() - 释放锁
+    Lock->>CLHQueue: unparkSuccessor()
+    Lock->>Producer: 再次唤醒Producer
+    
+    Producer->>Lock: tryAcquire(1) - 成功
+    Note over Lock: state=1, owner=Producer
+    Producer->>Producer: await()返回，继续执行
+    Producer->>Producer: queue.offer(item) - 生产
+    Producer->>NotEmpty: signal()
+    Producer->>Lock: unlock()
+```
+
+#### 7.4.3 await() 和 signal() 流程
+
+这个流程图展示了 await() 和 signal() 的基本交互流程，重点突出节点在两个队列之间的转移过程。
+
+```mermaid
+sequenceDiagram
+    participant Thread as 持有锁的线程
+    participant Lock as ReentrantLock
+    participant Condition as Condition
+    participant AQS as AQS
+    participant CondQueue as 条件队列
+    participant CLHQueue as CLH队列
+    
+    Note over Thread: 已持有锁，调用await()
+    Thread->>Lock: await()
+    Lock->>AQS: fullyRelease(node)
+    Note over AQS: 完全释放锁（state=0）
+    AQS->>CLHQueue: 唤醒等待线程
+    Lock->>Condition: addConditionWaiter()
+    Condition->>CondQueue: 将节点加入条件队列尾部
+    Lock->>AQS: isOnSyncQueue(node)?
+    AQS-->>Lock: false
+    Lock->>AQS: park() 阻塞当前线程
+    
+    Note over Thread: 其他线程调用signal()
+    Thread->>Condition: signal()
+    Condition->>CondQueue: 获取第一个等待节点
+    Condition->>AQS: transferForSignal(node)
+    AQS->>CondQueue: 从条件队列移除
+    AQS->>CLHQueue: 加入CLH队列尾部
+    AQS->>AQS: unpark(node.thread)
+    Note over Thread: 原线程被唤醒
+    Thread->>AQS: acquireQueued(node, savedState)
+    AQS->>Lock: tryAcquire(savedState)
+    Lock-->>AQS: 重新获取锁
+    AQS-->>Thread: 继续执行
+```
+
+**流程关键步骤说明：**
+
+1. **await() 阶段**：
+   - 线程调用 `await()` 时已持有锁
+   - `fullyRelease()` 完全释放锁（即使有重入也全部释放）
+   - 创建节点并加入条件队列（waitStatus = CONDITION）
+   - 线程被 `park()` 阻塞
+
+2. **signal() 阶段**：
+   - 其他线程调用 `signal()`（必须持有锁）
+   - `transferForSignal()` 将节点从条件队列转移到同步队列
+   - 节点的 waitStatus 从 CONDITION 变为 0
+   - 节点被加入同步队列尾部
+
+3. **唤醒和重新获取锁**：
+   - 节点被转移到同步队列后，线程被 `unpark()` 唤醒
+   - 线程在 `acquireQueued()` 中自旋，尝试获取锁
+   - 使用 `savedState`（保存的重入次数）重新获取锁
+   - 获取成功后，`await()` 返回，线程继续执行
+
+**节点转移过程：**
+
+```mermaid
+graph LR
+    subgraph "await()前"
+        A1[Thread持有锁<br/>在同步队列或执行中]
+    end
+    
+    subgraph "await()后"
+        A2[Thread节点<br/>waitStatus=CONDITION<br/>在条件队列中]
+    end
+    
+    subgraph "signal()后"
+        A3[Thread节点<br/>waitStatus=0<br/>在同步队列尾部]
+    end
+    
+    subgraph "重新获取锁后"
+        A4[Thread持有锁<br/>继续执行]
+    end
+    
+    A1 -->|await| A2
+    A2 -->|signal| A3
+    A3 -->|acquireQueued| A4
+    
+    style A1 fill:#c8e6c9
+    style A2 fill:#fff9c4
+    style A3 fill:#e1f5ff
+    style A4 fill:#c8e6c9
+```
+
+#### 7.4.4 为什么 await() 和 signal() 都必须先持有锁？
+
+这是一个非常重要的设计问题。理解这个原因有助于正确使用 Condition。
+
+##### 7.4.4.1 await() 必须先持有锁的原因
+
+**原因1：原子性保证 - 检查条件状态和进入等待的原子性**
+
+```java
+// 错误的用法（没有锁）
+public void consume() {
+    while (queue.isEmpty()) {  // 检查条件
+        // 问题：在这里可能其他线程修改了queue，导致状态不一致
+        condition.await();      // 进入等待
+    }
+}
+
+// 正确的用法（有锁保护）
+public void consume() {
+    lock.lock();
+    try {
+        while (queue.isEmpty()) {  // 在持有锁的情况下检查条件
+            condition.await();      // 原子地释放锁并进入等待
+        }
+    } finally {
+        lock.unlock();
+    }
+}
+```
+
+**竞态条件示例：**
+
+```mermaid
+sequenceDiagram
+    participant T1 as Thread1（消费者）
+    participant T2 as Thread2（生产者）
+    participant Queue as 队列
+    
+    Note over T1: 没有锁保护
+    T1->>Queue: 检查queue.isEmpty()
+    Queue-->>T1: true（队列为空）
+    
+    Note over T2: 此时T2可以修改队列
+    T2->>Queue: queue.offer(item) - 添加元素
+    Note over Queue: 队列：空 → 有1个元素
+    
+    Note over T1: T1不知道队列已被修改
+    T1->>T1: await() - 进入等待
+    Note over T1: 问题：队列已经有元素了，<br/>但T1还在等待！
+    
+    Note over T2: T2调用signal()
+    T2->>T1: 唤醒T1
+    Note over T1: 但可能为时已晚，<br/>或需要再次signal
+```
+
+**原因2：需要原子地释放锁并加入条件队列**
+
+```java
+public final void await() throws InterruptedException {
+    // 1. 必须已经持有锁，才能调用 fullyRelease()
+    int savedState = fullyRelease(node);  // 完全释放锁
+    
+    // 2. 将节点加入条件队列（必须在持有锁时检查状态）
+    Node node = addConditionWaiter();
+    
+    // 3. 如果不在持有锁的情况下，无法安全地操作这些步骤
+}
+```
+
+如果没有锁保护，可能出现的问题：
+- 多个线程同时调用 `await()`，导致条件队列状态不一致
+- 在检查和等待之间，其他线程修改了共享状态
+- 无法正确保存和恢复锁的重入状态
+
+**原因3：防止死锁和竞态条件**
+
+```mermaid
+graph TB
+    subgraph "没有锁保护 await"
+        A1[检查条件状态]
+        A2[其他线程修改状态]
+        A3[await进入等待]
+        A4[信号丢失或重复]
+        
+        A1 --> A2
+        A2 --> A3
+        A3 --> A4
+        
+        style A2 fill:#ffcdd2
+        style A4 fill:#ffcdd2
+    end
+    
+    subgraph "有锁保护 await"
+        B1[获取锁]
+        B2[检查条件状态]
+        B3[原子地释放锁并等待]
+        B4[被唤醒后重新获取锁]
+        
+        B1 --> B2
+        B2 --> B3
+        B3 --> B4
+        
+        style B1 fill:#c8e6c9
+        style B3 fill:#c8e6c9
+        style B4 fill:#c8e6c9
+    end
+```
+
+##### 7.4.4.2 signal() 必须先持有锁的原因
+
+**原因1：原子性保证 - 修改条件状态和唤醒线程的原子性**
+
+```java
+// 错误的用法（没有锁）
+public void produce() {
+    queue.offer(item);        // 修改共享状态
+    condition.signal();       // 唤醒等待线程
+    // 问题：signal后，其他线程可能立即修改queue，导致被唤醒的线程看到错误的状态
+}
+
+// 正确的用法（有锁保护）
+public void produce() {
+    lock.lock();
+    try {
+        queue.offer(item);        // 在持有锁的情况下修改状态
+        condition.signal();       // 原子地唤醒等待线程
+    } finally {
+        lock.unlock();           // 释放锁，让被唤醒的线程可以获取锁
+    }
+}
+```
+
+**丢失信号（Lost Wake-up）问题：**
+
+```mermaid
+sequenceDiagram
+    participant T1 as Thread1（消费者）
+    participant T2 as Thread2（生产者）
+    participant Queue as 队列
+    
+    Note over T1: T1检查队列为空，准备await
+    T1->>Queue: queue.isEmpty()
+    Queue-->>T1: true
+    
+    Note over T2: T2在没有锁的情况下操作
+    T2->>Queue: queue.offer(item)
+    T2->>T1: signal() - 唤醒T1
+    
+    Note over T1: 但T1还没有await
+    T1->>T1: await() - 进入等待
+    Note over T1: 问题：signal在await之前，<br/>信号丢失！
+    
+    Note over Queue: 队列有元素，但没有线程处理
+```
+
+**原因2：确保条件状态的一致性**
+
+```java
+public final void signal() {
+    // 1. 检查是否持有锁
+    if (!isHeldExclusively())
+        throw new IllegalMonitorStateException();
+    
+    // 2. 必须在持有锁的情况下，确保条件状态的修改是可见的
+    Node first = firstWaiter;
+    if (first != null)
+        doSignal(first);
+}
+```
+
+如果不持有锁，可能出现的问题：
+- 在 `signal()` 调用时，其他线程可能正在修改条件状态
+- 被唤醒的线程看到的可能是不一致的状态
+- 多个线程同时调用 `signal()`，导致条件队列状态混乱
+
+**原因3：保证正确的执行顺序**
+
+```java
+// 正确的执行顺序
+lock.lock();
+try {
+    // 1. 修改条件状态（在持有锁的情况下）
+    queue.offer(item);
+    
+    // 2. 唤醒等待线程（在持有锁的情况下）
+    condition.signal();
+    
+    // 3. 释放锁（让被唤醒的线程可以获取锁）
+} finally {
+    lock.unlock();
+}
+```
+
+##### 7.4.4.3 完整的执行流程对比
+
+**正确的流程（有锁保护）：**
+
+```mermaid
+sequenceDiagram
+    participant T1 as Thread1（消费者）
+    participant T2 as Thread2（生产者）
+    participant Lock as ReentrantLock
+    participant Queue as 队列
+    
+    Note over T1: 持有锁，检查条件
+    T1->>Lock: lock()
+    T1->>Queue: queue.isEmpty()
+    Queue-->>T1: true
+    T1->>T1: await() - 释放锁并等待
+    Note over Lock: state=0，锁已释放
+    
+    Note over T2: 获取锁，修改状态
+    T2->>Lock: lock() - 成功获取
+    T2->>Queue: queue.offer(item)
+    T2->>T1: signal() - 唤醒T1
+    Note over Lock: T2仍持有锁
+    
+    T2->>Lock: unlock() - 释放锁
+    Note over T1: T1被唤醒，获取锁
+    T1->>Lock: lock() - 重新获取锁
+    T1->>Queue: queue.poll() - 消费
+    T1->>Lock: unlock()
+```
+
+**错误的流程（没有锁保护）：**
+
+```mermaid
+sequenceDiagram
+    participant T1 as Thread1
+    participant T2 as Thread2
+    participant Queue as 队列
+    
+    Note over T1: 没有锁保护
+    T1->>Queue: queue.isEmpty()
+    Queue-->>T1: true
+    
+    Note over T2: T2同时修改队列
+    T2->>Queue: queue.offer(item)
+    T2->>T1: signal()
+    
+    Note over T1: T1不知道状态已改变
+    T1->>T1: await() - 进入等待
+    Note over T1: 问题：队列已有元素，<br/>但T1在等待，信号丢失
+```
+
+##### 7.4.4.4 代码验证
+
+```java
+public class ConditionExample {
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition condition = lock.newCondition();
+    private Queue<String> queue = new LinkedList<>();
+    
+    // ✅ 正确：await前持有锁
+    public void correctAwait() throws InterruptedException {
+        lock.lock();
+        try {
+            while (queue.isEmpty()) {
+                condition.await();  // 原子地释放锁并等待
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+    
+    // ❌ 错误：await前没有持有锁
+    public void incorrectAwait() throws InterruptedException {
+        // 没有获取锁
+        while (queue.isEmpty()) {
+            condition.await();  // 抛出 IllegalMonitorStateException
+        }
+    }
+    
+    // ✅ 正确：signal前持有锁
+    public void correctSignal() {
+        lock.lock();
+        try {
+            queue.offer("item");
+            condition.signal();  // 原子地修改状态并唤醒
+        } finally {
+            lock.unlock();
+        }
+    }
+    
+    // ❌ 错误：signal前没有持有锁
+    public void incorrectSignal() {
+        queue.offer("item");
+        condition.signal();  // 抛出 IllegalMonitorStateException
+    }
+}
+```
+
+##### 7.4.4.5 总结
+
+| 方法 | 为什么必须先持有锁 | 如果不持有锁会怎样 |
+|------|------------------|------------------|
+| **await()** | 1. 原子地检查条件状态和进入等待<br>2. 原子地释放锁并加入条件队列<br>3. 防止竞态条件和丢失信号 | 抛出 `IllegalMonitorStateException`<br>或出现竞态条件 |
+| **signal()** | 1. 原子地修改条件状态和唤醒线程<br>2. 确保状态一致性<br>3. 防止丢失信号 | 抛出 `IllegalMonitorStateException`<br>或导致状态不一致 |
+
+**核心原则：**
+- **await()** 和 **signal()** 必须在持有锁的情况下调用
+- 这保证了条件检查和等待/唤醒操作的原子性
+- 这确保了共享状态的一致性
+- 这防止了竞态条件和信号丢失
+
+##### 7.4.4.6 await() 和 signal() 必须使用同一把锁
+
+**关键点：await() 和 signal() 不仅必须先持有锁，还必须使用同一把锁！**
+
+**原因1：Condition 对象与 ReentrantLock 绑定**
+
+```java
+// Condition 对象是通过 ReentrantLock 实例创建的
+ReentrantLock lock = new ReentrantLock();
+Condition condition = lock.newCondition();  // Condition与lock绑定
+
+// await() 和 signal() 内部会检查是否持有同一个锁
+public final void await() throws InterruptedException {
+    // 内部会检查：当前线程是否持有创建这个Condition的ReentrantLock
+    if (!isHeldExclusively())  // 检查的是创建Condition的lock
+        throw new IllegalMonitorStateException();
+    // ...
+}
+
+public final void signal() {
+    // 内部会检查：当前线程是否持有创建这个Condition的ReentrantLock
+    if (!isHeldExclusively())  // 检查的是创建Condition的lock
+        throw new IllegalMonitorStateException();
+    // ...
+}
+```
+
+**错误示例：使用不同的锁**
+
+```java
+// ❌ 错误：await 和 signal 使用不同的锁
+public class WrongExample {
+    private ReentrantLock lock1 = new ReentrantLock();
+    private ReentrantLock lock2 = new ReentrantLock();
+    private Condition condition1 = lock1.newCondition();  // 从lock1创建
+    private Condition condition2 = lock2.newCondition();  // 从lock2创建
+    
+    public void method1() throws InterruptedException {
+        lock1.lock();  // 持有lock1
+        try {
+            condition1.await();  // 等待condition1（关联lock1）✓
+        } finally {
+            lock1.unlock();
+        }
+    }
+    
+    public void method2() {
+        lock2.lock();  // 持有lock2
+        try {
+            condition1.signal();  // ❌ 错误！condition1关联的是lock1，不是lock2
+            // 会抛出 IllegalMonitorStateException
+        } finally {
+            lock2.unlock();
+        }
+    }
+}
+```
+
+**正确示例：使用同一把锁**
+
+```java
+// ✅ 正确：await 和 signal 使用同一把锁
+public class CorrectExample {
+    private ReentrantLock lock = new ReentrantLock();
+    private Condition condition = lock.newCondition();  // 从同一个lock创建
+    
+    public void awaitMethod() throws InterruptedException {
+        lock.lock();  // 持有lock
+        try {
+            condition.await();  // 等待（关联lock）✓
+        } finally {
+            lock.unlock();
+        }
+    }
+    
+    public void signalMethod() {
+        lock.lock();  // 持有同一个lock
+        try {
+            condition.signal();  // 唤醒（关联同一个lock）✓
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+```
+
+**原因2：内部实现机制要求**
+
+Condition 对象内部持有对创建它的 ReentrantLock 的引用：
+
+```java
+// ConditionObject 内部（简化版）
+public class ConditionObject implements Condition {
+    private final AbstractQueuedSynchronizer sync;  // 关联的AQS（来自ReentrantLock）
+    
+    ConditionObject(AbstractQueuedSynchronizer sync) {
+        this.sync = sync;  // 保存对ReentrantLock内部Sync的引用
+    }
+    
+    public final void await() throws InterruptedException {
+        // 检查是否持有创建这个Condition的锁
+        if (!sync.isHeldExclusively())  // 检查sync对应的lock
+            throw new IllegalMonitorStateException();
+        // ...
+    }
+    
+    public final void signal() {
+        // 检查是否持有创建这个Condition的锁
+        if (!sync.isHeldExclusively())  // 检查sync对应的lock
+            throw new IllegalMonitorStateException();
+        // ...
+    }
+}
+```
+
+**原因3：队列转移机制要求**
+
+`await()` 和 `signal()` 涉及节点在不同队列之间的转移，这些操作必须在同一个 AQS 实例下进行：
+
+```mermaid
+graph TB
+    subgraph "同一把锁"
+        Lock1[ReentrantLock1]
+        Cond1[Condition1 from Lock1]
+        AQS1[AQS1]
+        Queue1[条件队列1和同步队列1]
+        
+        Lock1 --> Cond1
+        Lock1 --> AQS1
+        Cond1 --> AQS1
+        AQS1 --> Queue1
+    end
+    
+    subgraph "不同的锁"
+        Lock2[ReentrantLock1]
+        Lock3[ReentrantLock2]
+        Cond2[Condition1 from Lock1]
+        Cond3[Condition2 from Lock2]
+        AQS2[AQS1]
+        AQS3[AQS2]
+        
+        Lock2 --> Cond2
+        Lock3 --> Cond3
+        Lock2 --> AQS2
+        Lock3 --> AQS3
+        Cond2 --> AQS2
+        Cond3 --> AQS3
+        
+        Note3["❌ 无法跨AQS转移节点"]
+    end
+    
+    style Lock1 fill:#c8e6c9
+    style Cond1 fill:#c8e6c9
+    style Note3 fill:#ffcdd2
+```
+
+**原因4：状态同步要求**
+
+`await()` 会完全释放锁，`signal()` 后的线程需要重新获取锁。这个锁必须是创建 Condition 的同一个 ReentrantLock：
+
+```java
+public final void await() throws InterruptedException {
+    // 1. 创建条件节点
+    Node node = addConditionWaiter();
+    
+    // 2. 完全释放创建Condition的锁（必须是同一个lock）
+    int savedState = fullyRelease(node);  // 释放创建Condition的lock
+    
+    // 3. 等待被signal
+    while (!isOnSyncQueue(node)) {
+        LockSupport.park(this);
+    }
+    
+    // 4. 重新获取创建Condition的锁（必须是同一个lock）
+    if (acquireQueued(node, savedState)) {  // 重新获取创建Condition的lock
+        // ...
+    }
+}
+```
+
+**完整示例：验证必须使用同一把锁**
+
+```java
+public class ConditionLockTest {
+    // 两把不同的锁
+    private final ReentrantLock lock1 = new ReentrantLock();
+    private final ReentrantLock lock2 = new ReentrantLock();
+    
+    // Condition从lock1创建
+    private final Condition condition = lock1.newCondition();
+    
+    public void testAwaitWithLock1() throws InterruptedException {
+        lock1.lock();  // ✅ 使用创建Condition的锁
+        try {
+            System.out.println("Thread1 持有 lock1，准备 await");
+            condition.await();  // ✅ 成功
+            System.out.println("Thread1 被唤醒");
+        } finally {
+            lock1.unlock();
+        }
+    }
+    
+    public void testAwaitWithLock2() throws InterruptedException {
+        lock2.lock();  // ❌ 使用不同的锁
+        try {
+            System.out.println("Thread2 持有 lock2，准备 await");
+            condition.await();  // ❌ 抛出 IllegalMonitorStateException
+        } finally {
+            lock2.unlock();
+        }
+    }
+    
+    public void testSignalWithLock1() {
+        lock1.lock();  // ✅ 使用创建Condition的锁
+        try {
+            System.out.println("Thread3 持有 lock1，准备 signal");
+            condition.signal();  // ✅ 成功
+        } finally {
+            lock1.unlock();
+        }
+    }
+    
+    public void testSignalWithLock2() {
+        lock2.lock();  // ❌ 使用不同的锁
+        try {
+            System.out.println("Thread4 持有 lock2，准备 signal");
+            condition.signal();  // ❌ 抛出 IllegalMonitorStateException
+        } finally {
+            lock2.unlock();
+        }
+    }
+}
+```
+
+**执行结果：**
+```
+Thread1 持有 lock1，准备 await          // ✅ 成功
+Thread3 持有 lock1，准备 signal         // ✅ 成功，Thread1被唤醒
+Thread2 持有 lock2，准备 await          // ❌ IllegalMonitorStateException
+Thread4 持有 lock2，准备 signal         // ❌ IllegalMonitorStateException
+```
+
+**总结：**
+
+| 操作 | 要求 | 原因 |
+|------|------|------|
+| **await()** | 必须持有创建 Condition 的锁 | Condition 内部检查 `isHeldExclusively()` |
+| **signal()** | 必须持有创建 Condition 的锁 | Condition 内部检查 `isHeldExclusively()` |
+| **await 和 signal** | 必须使用同一把锁（创建 Condition 的锁） | 节点转移、状态同步、队列操作都需要同一个 AQS |
+
+**关键原则：**
+1. Condition 对象通过 `lock.newCondition()` 创建，与 lock 绑定
+2. `await()` 和 `signal()` 都必须持有创建 Condition 的同一个锁
+3. 不同锁创建的 Condition 不能混用
+4. 这是 Condition 机制正确工作的基础要求
+
+### 7.5 关键要点总结
+
+#### 7.5.1 await() 的关键点
+
+1. **必须先持有锁**：调用 `await()` 前必须获取锁（原因见 7.4.4）
+2. **完全释放锁**：即使有重入，也会全部释放（state → 0）
+3. **保存重入状态**：`savedState` 保存了重入次数，唤醒后恢复
+4. **转移到条件队列**：节点从同步队列转移到条件队列
+5. **阻塞等待**：线程被 `LockSupport.park()` 阻塞
+
+#### 7.5.2 signal() 的关键点
+
+1. **必须先持有锁**：调用 `signal()` 前必须获取锁
+2. **转移节点**：将节点从条件队列转移到同步队列
+3. **不立即唤醒**：只是转移，不立即唤醒（除非前驱节点已取消）
+4. **FIFO顺序**：按条件队列的顺序唤醒（先await的先signal）
+5. **需要释放锁**：signal后需要释放锁，被signal的线程才能获取锁
+
+#### 7.5.3 两个队列的关系
+
+```mermaid
+graph TB
+    subgraph "同步队列（CLH队列）"
+        CLH1[Thread1<br/>waitStatus: SIGNAL]
+        CLH2[Thread2<br/>waitStatus: SIGNAL]
+    end
+    
+    subgraph "条件队列（Condition队列）"
+        Cond1[Thread3<br/>waitStatus: CONDITION]
+        Cond2[Thread4<br/>waitStatus: CONDITION]
+    end
+    
+    Lock[ReentrantLock<br/>state=1, owner=Thread5]
+    
+    Lock -->|lock/unlock| CLH1
+    Lock -->|await| Cond1
+    Cond1 -->|signal| CLH2
+    
+    Note1["await(): 从同步队列 → 条件队列<br/>signal(): 从条件队列 → 同步队列"]
+    
+    style Lock fill:#ffebee
+    style Cond1 fill:#fff9c4
+    style CLH1 fill:#e3f2fd
+```
+
+#### 7.5.4 常见问题和注意事项
+
+1. **必须在持有锁时调用**：
+   ```java
+   // ❌ 错误
+   condition.await();  // 抛出IllegalMonitorStateException
+   
+   // ✅ 正确
+   lock.lock();
+   try {
+       condition.await();
+   } finally {
+       lock.unlock();
+   }
+   ```
+
+2. **使用while循环检查条件**：
+   ```java
+   // ❌ 错误：使用if
+   if (queue.isEmpty()) {
+       condition.await();
+   }
+   
+   // ✅ 正确：使用while
+   while (queue.isEmpty()) {
+       condition.await();
+   }
+   ```
+
+3. **signal()后需要释放锁**：
+   ```java
+   lock.lock();
+   try {
+       // 修改条件
+       condition.signal();  // 只是转移节点，不立即唤醒
+   } finally {
+       lock.unlock();  // 释放锁后，被signal的线程才能获取锁
+   }
+   ```
+
+### 7.6 实际应用场景
+
+#### 7.6.1 生产者-消费者模式
+
+```java
+public class BlockingQueue<T> {
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition notFull = lock.newCondition();
+    private final Condition notEmpty = lock.newCondition();
+    private final Queue<T> queue = new LinkedList<>();
+    private final int capacity;
+    
+    public BlockingQueue(int capacity) {
+        this.capacity = capacity;
+    }
+    
+    public void put(T item) throws InterruptedException {
+        lock.lock();
+        try {
+            while (queue.size() == capacity) {
+                notFull.await();  // 队列满，等待
+            }
+            queue.offer(item);
+            notEmpty.signal();  // 通知消费者
+        } finally {
+            lock.unlock();
+        }
+    }
+    
+    public T take() throws InterruptedException {
+        lock.lock();
+        try {
+            while (queue.isEmpty()) {
+                notEmpty.await();  // 队列空，等待
+            }
+            T item = queue.poll();
+            notFull.signal();  // 通知生产者
+            return item;
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+```
+
+#### 7.6.2 读写锁的实现思路
+
+```java
+public class ReadWriteLock {
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition readCondition = lock.newCondition();
+    private final Condition writeCondition = lock.newCondition();
+    private int readers = 0;
+    private boolean writer = false;
+    
+    public void lockRead() throws InterruptedException {
+        lock.lock();
+        try {
+            while (writer) {
+                readCondition.await();  // 有写者，等待
+            }
+            readers++;
+        } finally {
+            lock.unlock();
+        }
+    }
+    
+    public void lockWrite() throws InterruptedException {
+        lock.lock();
+        try {
+            while (writer || readers > 0) {
+                writeCondition.await();  // 有写者或读者，等待
+            }
+            writer = true;
+        } finally {
+            lock.unlock();
+        }
+    }
+    
+    public void unlockRead() {
+        lock.lock();
+        try {
+            readers--;
+            if (readers == 0) {
+                writeCondition.signal();  // 没有读者了，通知写者
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+    
+    public void unlockWrite() {
+        lock.lock();
+        try {
+            writer = false;
+            readCondition.signalAll();   // 通知所有读者
+            writeCondition.signal();     // 通知其他写者
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+```
+
+**说明：**
+- `lockRead()`: 如果有写者，则等待；否则增加读者数量
+- `lockWrite()`: 如果有写者或读者，则等待；否则设置写者标志
+- `unlockRead()`: 减少读者数量，如果读者数为0，通知写者
+- `unlockWrite()`: 清除写者标志，通知所有等待的读者和写者
+
+**完整示例：使用Condition实现生产者-消费者模式**
+
+```java
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.LinkedList;
+import java.util.Queue;
+
+public class ProducerConsumerExample {
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition notEmpty = lock.newCondition();  // 队列非空条件
+    private final Condition notFull = lock.newCondition();   // 队列未满条件
+    private final Queue<Integer> queue = new LinkedList<>();
+    private final int maxSize = 10;
+    
+    // 生产者
+    public void produce(int item) throws InterruptedException {
+        lock.lock();
+        try {
+            // 使用while而不是if，防止虚假唤醒
+            while (queue.size() == maxSize) {
+                System.out.println("队列已满，生产者等待...");
+                notFull.await();  // 队列满，等待
+            }
+            
+            queue.offer(item);
+            System.out.println("生产者生产: " + item + ", 队列大小: " + queue.size());
+            notEmpty.signal();  // 通知消费者队列非空
+        } finally {
+            lock.unlock();
+        }
+    }
+    
+    // 消费者
+    public int consume() throws InterruptedException {
+        lock.lock();
+        try {
+            // 使用while而不是if，防止虚假唤醒
+            while (queue.isEmpty()) {
+                System.out.println("队列为空，消费者等待...");
+                notEmpty.await();  // 队列空，等待
+            }
+            
+            int item = queue.poll();
+            System.out.println("消费者消费: " + item + ", 队列大小: " + queue.size());
+            notFull.signal();  // 通知生产者队列未满
+            return item;
+        } finally {
+            lock.unlock();
+        }
+    }
+    
+    // 测试代码
+    public static void main(String[] args) {
+        ProducerConsumerExample pc = new ProducerConsumerExample();
+        
+        // 生产者线程
+        Thread producer = new Thread(() -> {
+            try {
+                for (int i = 0; i < 20; i++) {
+                    pc.produce(i);
+                    Thread.sleep(100);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        
+        // 消费者线程
+        Thread consumer = new Thread(() -> {
+            try {
+                for (int i = 0; i < 20; i++) {
+                    pc.consume();
+                    Thread.sleep(150);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        
+        producer.start();
+        consumer.start();
+    }
+}
+```
+
+**执行流程分析：**
+
+```mermaid
+sequenceDiagram
+    participant P as 生产者线程
+    participant C as 消费者线程
+    participant Lock as ReentrantLock
+    participant NotFull as notFull条件
+    participant NotEmpty as notEmpty条件
+    participant Queue as 队列
+    
+    Note over P: 生产10个物品后，队列满
+    P->>Lock: lock()
+    P->>Queue: queue.size() == 10?
+    Queue-->>P: true（队列满）
+    P->>NotFull: await()
+    Note over P: 释放锁，进入条件队列等待
+    P->>Lock: unlock()（在await内部）
+    
+    Note over C: 消费者开始消费
+    C->>Lock: lock()
+    C->>Queue: queue.poll()
+    Queue-->>C: 取出物品
+    C->>NotFull: signal()
+    Note over NotFull: 将生产者节点转移到同步队列
+    C->>Lock: unlock()
+    
+    Note over P: 生产者被唤醒，重新获取锁
+    P->>Lock: lock()（从同步队列获取）
+    P->>Queue: queue.offer(item)
+    Note over P: 继续生产
+```
+
+## 8. 性能优化技术
 
 ```mermaid
 sequenceDiagram
