@@ -2108,6 +2108,216 @@ while (!CAS(false, true)) {  // CAS失败
    - 给其他线程（尤其是持有锁的线程）执行机会
    - 减少CPU空转，降低CPU占用率
 
+### 8.3.1 Thread.yield() 的详细工作机制
+
+#### 8.3.1.1 什么是CPU时间片？
+
+**CPU时间片（Time Slice）**是操作系统分配给线程的一个时间段（通常几毫秒到几十毫秒），在这个时间段内，线程可以独占CPU执行。
+
+```mermaid
+graph LR
+    subgraph "CPU时间片分配"
+        T1[线程T1<br/>时间片：10ms]
+        T2[线程T2<br/>时间片：10ms]
+        T3[线程T3<br/>时间片：10ms]
+    end
+    
+    Scheduler[操作系统调度器]
+    
+    Scheduler -->|分配| T1
+    Scheduler -->|分配| T2
+    Scheduler -->|分配| T3
+    
+    T1 -->|时间片用完| Scheduler
+    T2 -->|时间片用完| Scheduler
+    T3 -->|时间片用完| Scheduler
+    
+    style Scheduler fill:#fff9c4
+```
+
+#### 8.3.1.2 Thread.yield() 的工作原理
+
+**Thread.yield() 执行后会发生什么：**
+
+1. **主动让出当前时间片**：
+   - 当前线程主动放弃剩余的CPU时间片
+   - 将线程状态从"运行中"变为"就绪"状态
+   - 提示调度器："我现在不想占用CPU，可以先让其他线程执行"
+
+2. **线程调度器的响应**：
+   - 调度器收到yield信号后，会重新调度
+   - 选择其他就绪的线程执行
+   - 当前线程被放入就绪队列，等待下次调度
+
+3. **什么时候还回去**：
+   - **立即会被重新调度**：yield() 只是"建议"让出，不是阻塞
+   - **线程状态**：从"运行"变为"就绪"，仍然可以立即被调度
+   - **调度时机**：取决于操作系统的调度算法，通常是：
+     - 当前时间片结束时
+     - 其他线程阻塞或yield时
+     - 线程优先级更高时
+     - 通常在**几微秒到几毫秒**内就会被重新调度
+
+#### 8.3.1.3 Thread.yield() vs Thread.sleep()
+
+```mermaid
+sequenceDiagram
+    participant T1 as 线程T1
+    participant CPU as CPU调度器
+    participant T2 as 线程T2
+    
+    Note over T1: Thread.yield()
+    T1->>CPU: yield() - 主动让出
+    Note over T1: 状态：运行 → 就绪
+    CPU->>T2: 调度T2执行
+    Note over CPU: 等待调度时机
+    CPU-->>T1: 重新调度（可能立即）
+    Note over T1: 继续执行<br/>几乎没有延迟
+    
+    Note over T1: Thread.sleep(10)
+    T1->>CPU: sleep(10) - 主动阻塞
+    Note over T1: 状态：运行 → 阻塞（定时）
+    CPU->>T2: 调度T2执行
+    Note over CPU: 等待至少10ms
+    CPU-->>T1: 定时器唤醒（至少10ms后）
+    Note over T1: 继续执行<br/>延迟至少10ms
+```
+
+**关键区别：**
+
+| 特性 | Thread.yield() | Thread.sleep(n) |
+|------|---------------|-----------------|
+| **线程状态** | 运行 → 就绪 | 运行 → 阻塞（定时） |
+| **是否阻塞** | 否（非阻塞） | 是（阻塞指定时间） |
+| **重新调度时机** | 立即可能被调度（几微秒到几毫秒） | 至少等待n毫秒 |
+| **可中断性** | 不可中断 | 可中断（InterruptedException） |
+| **用途** | 降低CPU占用，给其他线程机会 | 精确等待指定时间 |
+
+#### 8.3.1.4 Thread.yield() 的执行时机示例
+
+**详细时序示例：**
+
+```java
+// 场景：线程T1自旋等待锁，线程T2持有锁
+
+// 时刻0ms：T1开始执行
+T1: lock() {
+    // 时刻1ms：CAS失败，开始退避
+    while (!CAS(false, true)) {
+        // 时刻1ms：执行Thread.yield()
+        Thread.yield();
+        
+        // Thread.yield() 执行过程：
+        // 1. T1主动让出剩余时间片（假设原本有10ms，已用1ms，剩余9ms）
+        // 2. T1状态：运行 → 就绪
+        // 3. CPU调度器重新调度
+        // 4. 调度器选择T2执行（因为T2可能正在等待CPU）
+        
+        // 时刻1.001ms：T2获得CPU，开始执行
+        // T2: 执行临界区代码...
+        
+        // 时刻5ms：T2的时间片用完了，或T2执行完毕，或T2也yield了
+        // 时刻5.001ms：调度器重新调度，T1可能再次获得CPU
+        // T1继续执行：backoff *= 2
+        
+        // 注意：T1可能在几微秒到几毫秒内就重新获得CPU
+        // 但具体时间取决于操作系统调度算法和当前系统负载
+    }
+}
+```
+
+**时间片归还的时机：**
+
+```mermaid
+sequenceDiagram
+    participant T1 as 线程T1（等待锁）
+    participant Scheduler as CPU调度器
+    participant T2 as 线程T2（持有锁）
+    participant T3 as 线程T3（其他）
+    
+    Note over T1: 执行Thread.yield()
+    T1->>Scheduler: yield() - 让出时间片
+    Note over T1: 状态：运行 → 就绪<br/>剩余时间片：放弃
+    
+    Note over Scheduler: 重新调度决策
+    
+    alt 有高优先级线程
+        Scheduler->>T2: 调度T2（持有锁，优先级高）
+        Note over T2: 执行临界区代码
+        Note over T2: 时间片用完或完成
+        T2->>Scheduler: 让出CPU
+    else 按时间片轮转
+        Scheduler->>T3: 调度T3（轮转调度）
+        Note over T3: 执行一段时间
+        T3->>Scheduler: 时间片用完
+    else 立即轮转回T1
+        Scheduler-->>T1: 立即调度T1
+        Note over T1: 重新获得CPU<br/>可能只等待几微秒
+    end
+    
+    Note over Scheduler: T1回到就绪队列头部
+    Scheduler-->>T1: 重新调度T1
+    Note over T1: 继续执行后续代码
+```
+
+**实际执行时间示例：**
+
+```java
+public class YieldTimingExample {
+    public static void main(String[] args) {
+        Thread t1 = new Thread(() -> {
+            long start = System.nanoTime();
+            Thread.yield();  // 让出时间片
+            long end = System.nanoTime();
+            System.out.println("yield() 后重新执行，耗时: " + (end - start) + " 纳秒");
+            // 典型值：几百纳秒到几微秒（0.0001ms - 0.01ms）
+        });
+        
+        Thread t2 = new Thread(() -> {
+            // 做一些工作
+            for (int i = 0; i < 1000; i++) {
+                // 模拟一些计算
+            }
+        });
+        
+        t1.start();
+        t2.start();
+    }
+}
+```
+
+**关键要点：**
+
+1. **Thread.yield() 不是阻塞**：
+   - 线程不会进入阻塞状态
+   - 只是建议让出CPU，不是强制等待
+
+2. **立即可能被重新调度**：
+   - 调度器可能立即重新调度当前线程
+   - 也可能先调度其他线程
+   - 取决于调度算法和系统负载
+
+3. **没有时间保证**：
+   - 不保证具体等待时间
+   - 可能立即恢复，也可能等待几毫秒
+   - 不保证其他线程会立即执行
+
+4. **实际效果**：
+   - 给其他线程执行机会（但不保证）
+   - 降低当前线程的CPU占用
+   - 减少自旋带来的CPU浪费
+
+**在自旋锁中的应用：**
+
+```java
+while (!locked.compareAndSet(false, true)) {
+    Thread.yield();  // 让出CPU，给持有锁的线程执行机会
+    // 期望：持有锁的线程能快速执行完，释放锁
+    // 实际：可能立即恢复，也可能等待一段时间
+    // 但无论如何，都比纯自旋（一直CAS）要好
+}
+```
+
 **时序图示例：**
 
 ```mermaid
