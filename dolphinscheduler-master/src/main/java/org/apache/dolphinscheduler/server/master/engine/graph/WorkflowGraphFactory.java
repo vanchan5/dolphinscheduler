@@ -43,10 +43,27 @@ public class WorkflowGraphFactory {
 
     public IWorkflowGraph createWorkflowGraph(WorkflowDefinition workflowDefinition) {
 
+        /**
+         * 根据workflow_definition_code和workflow_definition_version
+         * 查询t_ds_workflow_task_relation_log
+         *
+         * 转为WorkflowTaskRelation
+         */
         List<WorkflowTaskRelation> workflowTaskRelations = processService.findRelationByCode(
                 workflowDefinition.getCode(),
                 workflowDefinition.getVersion());
-
+        /**
+         *  pre_task_code = 0 说明是开始节点,没有前置节点,post_task_code为自身code
+         *  post_task_code != 0 说明有前置节点
+         *  post_task_code != 0 说明有前置节点
+         *  例子
+         * select tdtdl.*
+         * from t_ds_task_definition_log tdtdl
+         * inner join t_ds_workflow_task_relation_log tdwtrl on tdwtrl.post_task_code = tdtdl.code and
+         *                                                      tdwtrl.post_task_version = tdtdl.version
+         * where workflow_definition_code = '160443746112000' and workflow_definition_version=3
+         * and tdwtrl.post_task_code > 0
+         */
         List<TaskDefinition> taskDefinitions = taskDefinitionLogDao.queryTaskDefineLogList(workflowTaskRelations)
                 .stream()
                 .map(TaskDefinition.class::cast)

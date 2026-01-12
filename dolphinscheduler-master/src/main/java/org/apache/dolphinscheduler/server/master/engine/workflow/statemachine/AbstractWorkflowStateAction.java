@@ -62,23 +62,29 @@ public abstract class AbstractWorkflowStateAction implements IWorkflowStateActio
     protected WorkflowEventBusCoordinator workflowEventBusCoordinator;
 
     /**
-     * Try to trigger the tasks if the trigger condition is met.
-     * <p> If all the given tasks trigger condition is not met then will try to emit workflow finish event.
+     * 如果满足触发条件，尝试触发任务。
+     * 如果所有给定的任务触发条件均未满足，则将尝试发出工作流完成事件.
+     *
      */
     protected void triggerTasks(final IWorkflowExecutionRunnable workflowExecutionRunnable,
                                 final List<ITaskExecutionRunnable> taskExecutionRunnables) {
         final IWorkflowExecutionGraph workflowExecutionGraph = workflowExecutionRunnable.getWorkflowExecutionGraph();
+        // 1. 筛选满足触发条件的任务
         final List<ITaskExecutionRunnable> readyTaskExecutionRunnableList = taskExecutionRunnables
                 .stream()
                 .filter(workflowExecutionGraph::isTriggerConditionMet) //是否满足触发条件
                 .collect(Collectors.toList());
+        // 2. 如果没有可触发的任务，检查是否可以结束工作流
         if (CollectionUtils.isEmpty(readyTaskExecutionRunnableList)) {
             emitWorkflowFinishedEventIfApplicable(workflowExecutionRunnable);
             return;
         }
+        // 3. 遍历所有满足条件的任务，逐个发布TaskStartLifecycleEvent
         final WorkflowEventBus workflowEventBus = workflowExecutionRunnable.getWorkflowEventBus();
         for (ITaskExecutionRunnable readyTaskExecutionRunnable : readyTaskExecutionRunnableList) {
+            // 标记任务为活跃状态
             workflowExecutionGraph.markTaskExecutionRunnableActive(readyTaskExecutionRunnable);
+            // 如果任务被跳过或禁用，直接标记为非活跃并发布完成事件
             if (workflowExecutionGraph.isTaskExecutionRunnableSkipped(readyTaskExecutionRunnable)
                     || workflowExecutionGraph.isTaskExecutionRunnableForbidden(readyTaskExecutionRunnable)) {
                 workflowExecutionGraph.markTaskExecutionRunnableInActive(readyTaskExecutionRunnable);
@@ -87,6 +93,7 @@ public abstract class AbstractWorkflowStateAction implements IWorkflowStateActio
                                 workflowExecutionRunnable, readyTaskExecutionRunnable));
                 continue;
             }
+            // 发布TaskStartLifecycleEvent，触发任务执行
             workflowEventBus.publish(TaskStartLifecycleEvent.of(readyTaskExecutionRunnable));
         }
     }

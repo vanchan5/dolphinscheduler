@@ -80,7 +80,7 @@ public abstract class AbstractCommandHandler implements ICommandHandler {
         assembleWorkflowDefinition(workflowExecuteContextBuilder);
         // 组装项目信息
         assembleProject(workflowExecuteContextBuilder);
-        // 组装工作流有向无环图
+        // 组装工作流有向无环图(基于TaskDefinition，描述工作流的静态结构)
         assembleWorkflowGraph(workflowExecuteContextBuilder);
         // 组装工作流实例(子类实现)
         assembleWorkflowInstance(workflowExecuteContextBuilder);
