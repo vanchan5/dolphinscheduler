@@ -332,7 +332,7 @@ public class WorkflowGraphTopologyLogicalVisitor {
                 .collect(Collectors.toMap(TaskDefinition::getName,
                         taskDefinition -> workflowGraph.getPredecessors(taskDefinition.getName()).size()));
         
-        // 初始化队列：将所有入度为0的节点加入队列（起始节点）
+        // 初始化队列：将所有入度为0的节点加入队列（起始节点）,🌟按照添加顺序来遍历🌟
         final LinkedList<String> bootstrapTaskCodes = inDegreeMap
                 .entrySet()
                 .stream()
