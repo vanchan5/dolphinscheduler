@@ -325,6 +325,8 @@ public class WorkflowGraphTopologyLogicalVisitor {
     private void doVisitationInSubGraph(Set<String> subGraphNodes) {
         // 构建入度Map：记录每个节点的入度（前置节点数量）
         // key: 任务名称, value: 入度（前置节点数量）
+        // 注意：Collectors.toMap在遇到重复key时会抛出IllegalStateException，
+        // 但这里从getAllTaskNodes()获取的所有任务节点，每个任务名称是唯一的，所以不会重复
         Map<String, Integer> inDegreeMap = workflowGraph.getAllTaskNodes()
                 .stream()
                 .collect(Collectors.toMap(TaskDefinition::getName,
@@ -366,6 +368,10 @@ public class WorkflowGraphTopologyLogicalVisitor {
                 
                 // 更新所有后继节点的入度（减1）
                 // 当前节点已经处理完成，其所有后继节点的前置依赖减少1
+                // 注意：Map.put(key, value)不会报错，即使key已存在。
+                // 如果key已存在，put会用新值替换旧值；如果key不存在，put会添加新的键值对。
+                // 这里所有的successor都在inDegreeMap中（因为它们都在workflowGraph中），
+                // 所以这里是更新操作，不会添加新key，也不会报错。
                 for (String successor : successors) {
                     inDegreeMap.put(successor, inDegreeMap.get(successor) - 1);
                 }

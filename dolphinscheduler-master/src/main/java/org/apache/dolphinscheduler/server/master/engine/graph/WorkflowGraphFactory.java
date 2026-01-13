@@ -57,7 +57,7 @@ public class WorkflowGraphFactory {
          *  post_task_code != 0 说明有前置节点
          *  post_task_code != 0 说明有前置节点
          *  例子
-         * select tdtdl.*
+         * select distinct tdtdl.*
          * from t_ds_task_definition_log tdtdl
          * inner join t_ds_workflow_task_relation_log tdwtrl on tdwtrl.post_task_code = tdtdl.code and
          *                                                      tdwtrl.post_task_version = tdtdl.version
