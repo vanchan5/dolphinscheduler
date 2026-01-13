@@ -53,6 +53,12 @@ public class WorkflowExecuteContext implements IWorkflowExecuteContext {
 
     private final List<IWorkflowLifecycleListener> workflowInstanceLifecycleListeners;
 
+    /**
+     * 使用 Builder 是因为 WorkflowExecuteContext 设计为不可变对象（字段为 final），
+     * 并且需要在多个方法中按依赖顺序逐步组装，Builder 模式能很好地支持这种需求。如果改成直接设置，
+     * 需要将字段改为非 final 并添加 setter，这会破坏不可变性，增加线程安全风险，也不符合设计意图。
+     * @return
+     */
     public static WorkflowExecuteContextBuilder builder() {
         return new WorkflowExecuteContextBuilder();
     }

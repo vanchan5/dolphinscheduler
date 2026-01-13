@@ -316,7 +316,10 @@ public class RunWorkflowCommandHandler extends AbstractCommandHandler {
                             .workflowEventBus(workflowExecuteContextBuilder.getWorkflowEventBus())
                             // Spring应用上下文（用于获取各种Bean）
                             .applicationContext(applicationContext)
-                            // 注意：taskInstance为null，在首次触发时通过initializeFirstRunTaskInstance()创建
+                            /**
+                             * 注意：taskInstance为null，在首次触发时通过initializeFirstRunTaskInstance()创建
+                             * {@link TaskStartLifecycleEventHandler#handle(IWorkflowExecutionRunnable, TaskStartLifecycleEvent)}
+                             */
                             .build();
             
             // 创建TaskExecutionRunnable实例并添加到执行图中
