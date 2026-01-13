@@ -601,7 +601,7 @@ graph TB
     style IQ1 fill:#ffcdd2
 ```
 
-**写缓冲器的工作原理（来自并发编程艺术）：**
+##### 1.1.10.1 写缓冲器的工作原理（来自并发编程艺术）
 
 1. **写操作的异步处理**：
    - CPU执行写操作时，先将数据放入写缓冲器
@@ -619,7 +619,7 @@ graph TB
    - 失效队列提高了响应速度（不需要等待失效完成）
    - 但可能导致CPU读取到过时的数据
 
-**写缓冲器和失效队列导致的可见性问题：**
+##### 1.1.10.2 写缓冲器和失效队列导致的可见性问题
 
 ```mermaid
 sequenceDiagram
@@ -660,7 +660,7 @@ sequenceDiagram
     Note over CPU1: 如果失效队列处理延迟，<br/>CPU1可能读取到旧值
 ```
 
-**为什么需要内存屏障和CAS：**
+##### 1.1.10.3 为什么需要内存屏障和CAS
 
 由于写缓冲器和失效队列的存在，普通的读写操作无法保证可见性。需要：
 
@@ -668,12 +668,219 @@ sequenceDiagram
    - **Load Barrier（读屏障）**：确保读操作在屏障之前完成，失效队列处理完成
    - **Store Barrier（写屏障）**：确保写操作在屏障之前完成，写缓冲器提交完成
 
+**Load Barrier（读屏障）的工作原理：**
+
+Load Barrier的作用是确保读操作在屏障之前完成，并处理失效队列中的所有失效请求，保证读取到最新数据。
+
+```mermaid
+sequenceDiagram
+    participant CPU as CPU核心
+    participant Cache as L1缓存
+    participant IQ as 失效队列<br/>Invalidate Queue
+    participant Bus as 系统总线
+    participant OtherCPU as 其他CPU
+    participant Memory as 主内存
+    
+    Note over CPU: 准备读取数据
+    CPU->>Cache: Load: 读取变量x
+    Note over Cache: 检查缓存
+    
+    Note over CPU: 插入Load Barrier（读屏障）
+    CPU->>IQ: 检查失效队列
+    Note over IQ: 失效队列中可能有<br/>待处理的失效请求
+    
+    Note over IQ: 步骤1：处理失效队列
+    IQ->>IQ: 处理所有待处理的失效请求
+    Note over IQ: 失效队列：处理失效请求1
+    IQ->>Cache: 使缓存行1失效
+    Note over IQ: 失效队列：处理失效请求2
+    IQ->>Cache: 使缓存行2失效
+    Note over IQ: 失效队列：处理失效请求N
+    IQ->>Cache: 使缓存行N失效
+    Note over IQ: 失效队列处理完成 ✅
+    
+    Note over CPU: 步骤2：确保读操作完成
+    CPU->>Cache: 确保所有Load操作完成
+    Note over Cache: 缓存状态已更新<br/>（失效的缓存已清除）
+    
+    Note over CPU: 步骤3：从主内存或共享缓存读取
+    Cache->>Bus: 检查其他CPU缓存
+    Bus->>OtherCPU: 检查是否有最新数据
+    alt 其他CPU有最新数据
+        OtherCPU-->>Bus: 返回最新数据
+        Bus-->>Cache: 更新缓存
+    else 从主内存读取
+        Cache->>Memory: 从主内存读取
+        Memory-->>Cache: 返回最新数据
+    end
+    
+    Cache-->>CPU: 返回最新值 ✅
+    Note over CPU: Load Barrier完成<br/>保证读取到最新数据
+```
+
+**Load Barrier的关键点：**
+- ✅ **处理失效队列**：屏障强制处理失效队列中的所有失效请求，确保缓存状态正确
+- ✅ **确保读操作完成**：屏障确保所有Load操作在屏障前完成
+- ✅ **读取最新数据**：从主内存或共享缓存读取最新数据，而不是从已失效的本地缓存读取
+
+**Store Barrier（写屏障）的工作原理：**
+
+Store Barrier的作用是确保写操作在屏障之前完成，并强制刷新写缓冲器中的所有写入操作到缓存和主内存。
+
+```mermaid
+sequenceDiagram
+    participant CPU as CPU核心
+    participant SB as 写缓冲器<br/>Store Buffer
+    participant Cache as L1缓存
+    participant Bus as 系统总线
+    participant Memory as 主内存
+    participant OtherCPU as 其他CPU
+    
+    Note over CPU: 执行写入操作
+    CPU->>SB: Store: x = 10
+    Note over SB: 写缓冲器：x=10（待刷新）
+    SB-->>CPU: 立即返回（不等待）
+    
+    CPU->>SB: Store: y = 20
+    Note over SB: 写缓冲器：x=10, y=20（待刷新）
+    SB-->>CPU: 立即返回（不等待）
+    
+    Note over CPU: 插入Store Barrier（写屏障）
+    CPU->>SB: 检查写缓冲器
+    
+    Note over SB: 步骤1：等待所有Store操作完成
+    SB->>SB: 等待写缓冲器中的所有操作完成
+    Note over SB: 写缓冲器：x=10, y=20（待刷新）
+    
+    Note over SB: 步骤2：强制刷新写缓冲器
+    SB->>Cache: 刷新 x = 10
+    Note over Cache: 缓存：x=10（已更新）
+    SB->>Cache: 刷新 y = 20
+    Note over Cache: 缓存：x=10, y=20（已更新）
+    Note over SB: 写缓冲器刷新完成 ✅
+    
+    Note over CPU: 步骤3：强制刷新到主内存
+    CPU->>Cache: 强制刷新Modified状态
+    Cache->>Bus: 通过MESI协议同步
+    Bus->>Memory: 刷新到主内存
+    Note over Memory: 主内存：x=10, y=20（已更新）✅
+    
+    Note over CPU: 步骤4：确保其他CPU可见
+    Bus->>OtherCPU: 通知其他CPU缓存失效
+    OtherCPU-->>Bus: 确认失效
+    Note over OtherCPU: 其他CPU缓存已失效<br/>下次读取会从主内存获取最新值
+    
+    Note over CPU: Store Barrier完成<br/>保证写入对所有CPU可见 ✅
+```
+
+**Store Barrier的关键点：**
+- ✅ **强制刷新写缓冲器**：屏障强制写缓冲器中的所有Store操作刷新到缓存
+- ✅ **确保写操作完成**：屏障确保所有Store操作在屏障前完成
+- ✅ **刷新到主内存**：强制刷新Modified状态的缓存到主内存
+- ✅ **保证可见性**：确保写入对所有CPU立即可见
+
+**Load Barrier 和 Store Barrier 的对比：**
+
+```mermaid
+graph TB
+    subgraph "Load Barrier（读屏障）"
+        LB1[处理失效队列]
+        LB2[确保读操作完成]
+        LB3[从主内存读取最新数据]
+        LB4[保证读取到最新值]
+    end
+    
+    subgraph "Store Barrier（写屏障）"
+        SB1[强制刷新写缓冲器]
+        SB2[确保写操作完成]
+        SB3[刷新到主内存]
+        SB4[保证写入对所有CPU可见]
+    end
+    
+    LB1 --> LB2
+    LB2 --> LB3
+    LB3 --> LB4
+    
+    SB1 --> SB2
+    SB2 --> SB3
+    SB3 --> SB4
+    
+    style LB1 fill:#e1f5ff
+    style LB4 fill:#e8f5e9
+    style SB1 fill:#fff4e1
+    style SB4 fill:#e8f5e9
+```
+
+**对比总结：**
+
+| 特性 | Load Barrier（读屏障） | Store Barrier（写屏障） |
+|------|----------------------|----------------------|
+| **主要作用** | 处理失效队列 | 刷新写缓冲器 |
+| **确保操作** | 读操作完成 | 写操作完成 |
+| **处理组件** | 失效队列（Invalidate Queue） | 写缓冲器（Store Buffer） |
+| **保证** | 读取到最新数据 | 写入对所有CPU可见 |
+| **使用场景** | 读取共享变量前 | 写入共享变量后 |
+
+**完整示例：Load Barrier 和 Store Barrier 的配合使用**
+
+```mermaid
+sequenceDiagram
+    participant T1 as 线程T1（CPU1）
+    participant CPU1 as CPU1核心
+    participant SB1 as CPU1写缓冲器
+    participant Cache1 as CPU1缓存
+    participant Barrier1 as Store Barrier
+    participant Memory as 主内存
+    participant T2 as 线程T2（CPU2）
+    participant CPU2 as CPU2核心
+    participant IQ2 as CPU2失效队列
+    participant Cache2 as CPU2缓存
+    participant Barrier2 as Load Barrier
+    
+    Note over T1: 线程T1写入数据
+    T1->>CPU1: Store: x = 10
+    CPU1->>SB1: 放入写缓冲器
+    Note over SB1: 写缓冲器：x=10（待刷新）
+    
+    Note over T1: 插入Store Barrier
+    T1->>Barrier1: Store Barrier
+    Note over Barrier1: 强制刷新写缓冲器
+    Barrier1->>SB1: 强制刷新所有Store操作
+    SB1->>Cache1: 刷新 x=10
+    Cache1->>Memory: 刷新到主内存
+    Note over Memory: 主内存：x=10（已更新）✅
+    Barrier1->>CPU1: 屏障完成
+    
+    Note over T2: 线程T2读取数据
+    T2->>CPU2: Load: 读取变量x
+    CPU2->>Cache2: 检查缓存
+    Note over Cache2: 缓存可能已失效
+    
+    Note over T2: 插入Load Barrier
+    T2->>Barrier2: Load Barrier
+    Note over Barrier2: 处理失效队列
+    Barrier2->>IQ2: 处理所有失效请求
+    IQ2->>Cache2: 使缓存失效
+    Note over Cache2: 缓存已失效
+    Barrier2->>Memory: 从主内存读取
+    Note over Memory: 主内存：x=10（最新值）✅
+    Memory-->>Cache2: 返回 x = 10 ✅
+    Cache2-->>CPU2: x = 10
+    Barrier2->>CPU2: 屏障完成
+    CPU2-->>T2: 看到最新值 10 ✅
+```
+
+**关键理解：**
+- ✅ **Store Barrier**：确保写入操作刷新到主内存，对所有CPU可见
+- ✅ **Load Barrier**：确保失效队列已处理，从主内存读取最新数据
+- ✅ **配合使用**：两个屏障配合使用，保证多CPU环境下的数据一致性
+
 2. **CAS原子操作**：
    - CAS操作会隐式包含内存屏障
    - 确保操作在所有CPU上的可见性和有序性
    - 不需要显式地刷新写缓冲器或处理失效队列
 
-**CAS如何绕过写缓冲器和失效队列：**
+##### 1.1.10.4 CAS如何绕过写缓冲器和失效队列
 
 ```mermaid
 sequenceDiagram
