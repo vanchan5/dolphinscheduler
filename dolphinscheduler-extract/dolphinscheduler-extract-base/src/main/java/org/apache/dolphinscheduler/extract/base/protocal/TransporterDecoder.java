@@ -48,6 +48,8 @@ import io.netty.handler.codec.ReplayingDecoder;
  * 自动处理数据不足：数据未到齐时自动等待，无需手动检查
  * 简化代码：无需手动检查 readableBytes()
  * 状态管理：通过 checkpoint() 管理解码状态
+ *
+ * 这个是在worker线程处理的
  */
 @Slf4j
 public class TransporterDecoder extends ReplayingDecoder<TransporterDecoder.State> {

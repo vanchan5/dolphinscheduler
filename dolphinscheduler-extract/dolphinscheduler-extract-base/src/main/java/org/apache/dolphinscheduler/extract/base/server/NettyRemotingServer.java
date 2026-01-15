@@ -17,7 +17,9 @@
 
 package org.apache.dolphinscheduler.extract.base.server;
 
+import io.netty.channel.*;
 import org.apache.dolphinscheduler.common.thread.ThreadUtils;
+import org.apache.dolphinscheduler.extract.base.client.NettyClientHandler;
 import org.apache.dolphinscheduler.extract.base.config.NettyServerConfig;
 import org.apache.dolphinscheduler.extract.base.exception.RemoteException;
 import org.apache.dolphinscheduler.extract.base.protocal.TransporterDecoder;
@@ -32,11 +34,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.Epoll;
 import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -151,10 +148,13 @@ class NettyRemotingServer {
                 .addLast("encoder", new TransporterEncoder())
                 .addLast("decoder", new TransporterDecoder())
                 .addLast("server-idle-handle",
-                        // 服务端：60 秒未收到数据,触发 READER_IDLE 事件,服务端
-                        // org.apache.dolphinscheduler.extract.base.server.JdkDynamicServerHandler.userEventTriggered
-                        // 调用 ctx.close(),客户端收到连接关闭信号
-                        // 客户端触发 channelInactive() -》客户端的eventLoop线程的handler(NettyClientHandler)调用channelInactive方法
+                        //
+                        /**
+                         * 服务端：60 秒未收到数据,触发 READER_IDLE 事件,服务端
+                         * {@link JdkDynamicServerHandler#userEventTriggered(ChannelHandlerContext, Object)}
+                         * 调用 ctx.close(),客户端收到连接关闭信号 {@link NettyClientHandler#channelInactive(ChannelHandlerContext)}
+                         * 客户端触发 channelInactive() -》客户端的eventLoop线程的handler(NettyClientHandler)调用channelInactive方法
+                         */
                         new IdleStateHandler(serverConfig.getConnectionIdleTime(), 0, 0, TimeUnit.MILLISECONDS))
                 .addLast("handler", channelHandler);
     }

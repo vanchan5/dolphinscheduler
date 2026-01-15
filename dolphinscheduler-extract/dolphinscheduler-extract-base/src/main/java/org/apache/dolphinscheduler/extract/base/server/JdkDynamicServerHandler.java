@@ -21,6 +21,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 
 import org.apache.dolphinscheduler.extract.base.StandardRpcRequest;
 import org.apache.dolphinscheduler.extract.base.StandardRpcResponse;
+import org.apache.dolphinscheduler.extract.base.client.NettyClientHandler;
 import org.apache.dolphinscheduler.extract.base.protocal.HeartBeatTransporter;
 import org.apache.dolphinscheduler.extract.base.protocal.Transporter;
 import org.apache.dolphinscheduler.extract.base.protocal.TransporterHeader;
@@ -41,6 +42,9 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 
+/**
+ * worker线程处理 (EventLoop)
+ */
 @Slf4j
 @ChannelHandler.Sharable
 class JdkDynamicServerHandler extends ChannelInboundHandlerAdapter {
@@ -172,7 +176,7 @@ class JdkDynamicServerHandler extends ChannelInboundHandlerAdapter {
 
     /**
      * 服务端 60 秒未收到数据 -》触发 READER_IDLE 事件 -》服务端调用 ctx.close() -》客户端收到连接关闭信号
-     * -》客户端触发 channelInactive()
+     * -》客户端触发 channelInactive() {@link NettyClientHandler#channelInactive(ChannelHandlerContext)}
      * @param ctx
      * @param evt
      * @throws Exception
