@@ -151,14 +151,36 @@ public class CommandEngine extends BaseDaemonThread implements AutoCloseable {
                     continue;
                 }
 
+                // ============================================================
+                // 并行处理多个命令（无依赖关系场景）
+                // ============================================================
+                // 设计思路：
+                // 1. 多个命令之间无依赖关系，可以全部并行异步执行，提高吞吐量
+                // 2. 每个命令的处理流程：创建工作流执行器 -> 启动工作流 -> 记录成功日志
+                // 3. 使用 CompletableFuture 链式调用串联处理步骤，代码清晰易维护
+                // 4. 使用 exceptionally 统一处理异常，单个命令失败不影响其他命令
+                // 5. 使用 allOf().join() 等待所有命令处理完成后再继续下一轮循环
+                //
+                // 性能优势：
+                // - 串行处理：总耗时 = 命令1耗时 + 命令2耗时 + ... + 命令N耗时
+                // - 并行处理：总耗时 = max(命令1耗时, 命令2耗时, ..., 命令N耗时)
+                // ============================================================
                 List<CompletableFuture<Void>> allCompleteFutures = new ArrayList<>();
                 for (Command command : commands) {
+                    // 为每个命令创建异步处理链：
+                    // 步骤1: bootstrapCommand(command) - 在 commandHandleThreadPool 中异步创建工作流执行器
+                    // 步骤2: thenAccept(bootstrapWorkflowExecutionRunnable) - 启动工作流执行（依赖步骤1的结果）
+                    // 步骤3: thenAccept(bootstrapSuccess) - 成功后记录日志（依赖步骤2的结果）
+                    // 异常处理: exceptionally - 统一处理异常，避免单个命令失败影响其他命令
                     CompletableFuture<Void> completableFuture = bootstrapCommand(command)
                             .thenAccept(this::bootstrapWorkflowExecutionRunnable)
                             .thenAccept((unused) -> bootstrapSuccess(command))
                             .exceptionally(throwable -> bootstrapError(command, throwable));
                     allCompleteFutures.add(completableFuture);
                 }
+                // 等待所有命令处理完成后再继续下一轮循环
+                // 使用 allOf() 等待所有 CompletableFuture 完成，join() 阻塞等待结果
+                // 此时所有命令都已完成，join() 会立即返回，不会再次阻塞
                 CompletableFuture.allOf(allCompleteFutures.toArray(new CompletableFuture[0])).join();
             } catch (InterruptedException interruptedException) {
                 log.warn("Master schedule bootstrap interrupted, close the loop", interruptedException);

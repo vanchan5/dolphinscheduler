@@ -1,16 +1,19 @@
 # CompletableFuture 详细分析
 
 ## 目录
-1. [概述](#概述)
-2. [核心架构](#核心架构)
-3. [主要方法分类](#主要方法分类)
-4. [链式调用场景](#链式调用场景)
-5. [异步编排模式](#异步编排模式)
-6. [最佳实践](#最佳实践)
+1. [概述](#1-概述)
+2. [核心架构](#2-核心架构)
+3. [主要方法分类](#3-主要方法分类)
+4. [链式调用场景](#4-链式调用场景---商品详情页实战案例)
+5. [异步编排模式](#5-异步编排模式)
+6. [组件交互图](#6-组件交互图)
+7. [方法分类总结表](#7-方法分类总结表)
+8. [最佳实践](#8-最佳实践)
+9. [总结](#9-总结)
 
 ---
 
-## 概述
+## 1. 概述
 
 `CompletableFuture` 是 Java 8 引入的一个强大的异步编程工具，实现了 `Future` 和 `CompletionStage` 接口。它不仅提供了异步任务执行能力，还支持复杂的任务编排、组合和链式调用。
 
@@ -23,7 +26,7 @@
 
 ---
 
-## 核心架构
+## 2. 核心架构
 
 ### 类层次结构
 
@@ -117,11 +120,11 @@ stateDiagram-v2
 
 ---
 
-## 主要方法分类
+## 3. 主要方法分类
 
-### 1. 创建 CompletableFuture
+### 3.1 创建 CompletableFuture
 
-#### 1.1 静态工厂方法
+#### 3.1.1 静态工厂方法
 
 | 方法 | 说明 | 返回类型 |
 |------|------|----------|
@@ -131,16 +134,16 @@ stateDiagram-v2
 | `runAsync(Runnable, Executor)` | 指定线程池执行无返回值的任务 | `CompletableFuture<Void>` |
 | `completedFuture(value)` | 创建一个已完成的 Future | `CompletableFuture<T>` |
 
-#### 1.2 实例方法
+#### 3.1.2 实例方法
 
 | 方法 | 说明 | 返回值 |
 |------|------|--------|
 | `complete(value)` | 手动完成 Future | `boolean` |
 | `completeExceptionally(ex)` | 手动完成并设置异常 | `boolean` |
 
-### 2. 结果转换（Transform）
+### 3.2 结果转换（Transform）
 
-#### 2.1 thenApply - 同步转换
+#### 3.2.1 thenApply - 同步转换
 
 ```java
 // 同步执行，使用当前线程
@@ -149,7 +152,7 @@ CompletableFuture<String> future = CompletableFuture
     .thenApply(s -> s + " World");  // 同步转换
 ```
 
-#### 2.2 thenApplyAsync - 异步转换
+#### 3.2.2 thenApplyAsync - 异步转换
 
 ```java
 // 异步执行，使用默认线程池
@@ -178,9 +181,9 @@ graph TB
     style F fill:#FFB6C1
 ```
 
-### 3. 结果消费（Consume）
+### 3.3 结果消费（Consume）
 
-#### 3.1 thenAccept - 消费结果
+#### 3.3.1 thenAccept - 消费结果
 
 ```java
 CompletableFuture<Void> future = CompletableFuture
@@ -188,7 +191,7 @@ CompletableFuture<Void> future = CompletableFuture
     .thenAccept(result -> System.out.println(result));  // 消费结果，无返回值
 ```
 
-#### 3.2 thenRun - 执行动作
+#### 3.3.2 thenRun - 执行动作
 
 ```java
 CompletableFuture<Void> future = CompletableFuture
@@ -214,9 +217,9 @@ sequenceDiagram
     Pool-->>CF: 完成
 ```
 
-### 4. 任务组合（Compose）
+### 3.4 任务组合（Compose）
 
-#### 4.1 thenCompose - 扁平化组合
+#### 3.4.1 thenCompose - 扁平化组合
 
 用于将一个 `CompletableFuture` 的结果作为另一个 `CompletableFuture` 的输入。
 
@@ -229,7 +232,7 @@ CompletableFuture<String> future = CompletableFuture
     );
 ```
 
-#### 4.2 thenCombine - 合并两个 Future
+#### 3.4.2 thenCombine - 合并两个 Future
 
 ```java
 CompletableFuture<String> future1 = CompletableFuture.supplyAsync(() -> "Hello");
@@ -257,9 +260,9 @@ graph LR
     style F fill:#87CEEB
 ```
 
-### 5. 多任务组合
+### 3.5 多任务组合
 
-#### 5.1 allOf - 等待所有任务完成
+#### 3.5.1 allOf - 等待所有任务完成
 
 `allOf` 返回一个 `CompletableFuture<Void>`，当所有 Future 完成时，这个 Future 也会完成。有两种主要使用方式：
 
@@ -318,7 +321,7 @@ results.thenAccept(list -> {
 
 > **注意**：`allOf` 返回的是 `CompletableFuture<Void>`，它本身不包含结果。如果需要收集所有任务的结果，需要在 `allOf` 完成后，再调用各个 Future 的 `join()` 方法获取结果。由于此时所有任务都已完成，`join()` 会立即返回，不会阻塞。
 
-#### 5.2 anyOf - 等待任一任务完成
+#### 3.5.2 anyOf - 等待任一任务完成
 
 `anyOf` 返回一个 `CompletableFuture<Object>`，当任一 Future 完成时，这个 Future 也会完成，并包含第一个完成的任务结果。
 
@@ -419,9 +422,9 @@ sequenceDiagram
     Pool->>F3: join() 获取结果
 ```
 
-### 6. 异常处理
+### 3.6 异常处理
 
-#### 6.1 exceptionally - 异常恢复
+#### 3.6.1 exceptionally - 异常恢复
 
 ```java
 CompletableFuture<String> future = CompletableFuture
@@ -435,7 +438,7 @@ CompletableFuture<String> future = CompletableFuture
     });
 ```
 
-#### 6.2 handle - 统一处理结果和异常
+#### 3.6.2 handle - 统一处理结果和异常
 
 ```java
 CompletableFuture<String> future = CompletableFuture
@@ -473,7 +476,7 @@ flowchart TD
 
 ---
 
-## 链式调用场景 - 商品详情页实战案例
+## 4. 链式调用场景 - 商品详情页实战案例
 
 以电商平台的**商品详情页**为例，展示 CompletableFuture 在不同依赖关系下的使用场景。
 
@@ -489,7 +492,7 @@ flowchart TD
 
 ---
 
-## 1. 无依赖关系 - 全部异步并行执行
+### 4.1 无依赖关系 - 全部异步并行执行
 
 ### 场景描述
 
@@ -677,9 +680,9 @@ public CompletableFuture<ProductDetailVO> getProductDetailAsync(Long productId) 
 
 ---
 
-## 2. 有依赖关系 - 串行执行
+### 4.2 有依赖关系 - 串行执行
 
-### 2.1 零依赖 -> 一元依赖 - 链式依赖
+### 4.2.1 零依赖 -> 一元依赖 - 链式依赖
 
 ### 场景描述
 
@@ -795,7 +798,7 @@ sequenceDiagram
     Step4-->>Main: join() 返回结果
 ```
 
-### 2.2 零依赖 -> 二元依赖 - 合并两个独立任务
+### 4.2.2 零依赖 -> 二元依赖 - 合并两个独立任务
 
 ### 场景描述
 
@@ -869,7 +872,7 @@ public List<ProductRecommend> getPersonalizedRecommend(Long productId, Long user
 
 **关键优势**：充分利用了任务A和任务B无依赖关系的特点，通过并行执行显著减少等待时间。
 
-### 2.3 零依赖 -> 多元依赖 - 合并多个独立任务
+### 4.2.3 零依赖 -> 多元依赖 - 合并多个独立任务
 
 ### 场景描述
 
@@ -966,7 +969,7 @@ public ProductDetailVO assembleProductDetail(Long productId) {
 
 **关键优势**：多个无依赖关系的任务并行执行，最后统一汇总，充分利用多核CPU和网络IO，显著提升性能。
 
-### 2.4 全部互相依赖 - 复杂的依赖关系
+### 4.2.4 全部互相依赖 - 复杂的依赖关系
 
 ### 场景描述
 
@@ -1133,7 +1136,7 @@ sequenceDiagram
 
 ---
 
-## 场景对比总结
+### 4.3 场景对比总结
 
 | 依赖类型 | 场景示例 | 特点 | 使用的方法 |
 |---------|---------|------|-----------|
@@ -1153,9 +1156,9 @@ sequenceDiagram
 
 ---
 
-## 异步编排模式
+## 5. 异步编排模式
 
-### 模式 1：流水线模式（Pipeline）
+### 5.1 流水线模式（Pipeline）
 
 多个任务按顺序执行，每个任务的输出作为下一个任务的输入。
 
@@ -1181,7 +1184,7 @@ CompletableFuture<Integer> pipeline = CompletableFuture
     .thenApply(validated -> saveData(validated));
 ```
 
-### 模式 2：扇出-扇入模式（Fork-Join）
+### 5.2 扇出-扇入模式（Fork-Join）
 
 一个任务分出多个并行任务，然后合并结果。
 
@@ -1240,7 +1243,7 @@ results.thenAccept(list -> {
 });
 ```
 
-### 模式 3：竞态模式（Race Condition）
+### 5.3 竞态模式（Race Condition）
 
 多个任务并行执行，取最先完成的结果。
 
@@ -1303,7 +1306,7 @@ CompletableFuture<Object> winner = CompletableFuture.anyOf(fast, slow);
 winner.thenAccept(result -> System.out.println("Winner: " + result));
 ```
 
-### 模式 4：条件执行模式
+### 5.4 条件执行模式
 
 根据前置任务的结果决定后续执行路径。
 
@@ -1337,7 +1340,7 @@ CompletableFuture<String> result = CompletableFuture
     });
 ```
 
-### 模式 5：重试模式
+### 5.5 重试模式
 
 任务失败后自动重试。
 
@@ -1370,7 +1373,7 @@ public CompletableFuture<String> retryAsync(int maxRetries) {
 
 ---
 
-## 组件交互图
+## 6. 组件交互图
 
 ### 完整异步编排交互流程
 
@@ -1410,9 +1413,9 @@ sequenceDiagram
 
 ---
 
-## 方法分类总结表
+## 7. 方法分类总结表
 
-### 创建方法
+### 7.1 创建方法
 
 | 方法 | 类型 | 说明 |
 |------|------|------|
@@ -1424,7 +1427,7 @@ sequenceDiagram
 | `complete(T)` | 实例 | 手动完成Future |
 | `completeExceptionally(Throwable)` | 实例 | 手动完成并设置异常 |
 
-### 转换方法
+### 7.2 转换方法
 
 | 方法 | 同步/异步 | 说明 |
 |------|-----------|------|
@@ -1432,7 +1435,7 @@ sequenceDiagram
 | `thenApplyAsync(Function)` | 异步 | 异步转换结果 |
 | `thenApplyAsync(Function, Executor)` | 异步 | 指定线程池转换结果 |
 
-### 消费方法
+### 7.3 消费方法
 
 | 方法 | 同步/异步 | 说明 |
 |------|-----------|------|
@@ -1441,7 +1444,7 @@ sequenceDiagram
 | `thenRun(Runnable)` | 同步 | 执行动作，不依赖结果 |
 | `thenRunAsync(Runnable)` | 异步 | 异步执行动作 |
 
-### 组合方法
+### 7.4 组合方法
 
 | 方法 | 说明 |
 |------|------|
@@ -1451,14 +1454,14 @@ sequenceDiagram
 | `allOf(CompletableFuture...)` | 等待所有Future完成 |
 | `anyOf(CompletableFuture...)` | 等待任一Future完成 |
 
-### 异常处理
+### 7.5 异常处理
 
 | 方法 | 说明 |
 |------|------|
 | `exceptionally(Function)` | 捕获异常，返回默认值 |
 | `handle(BiFunction)` | 统一处理结果和异常 |
 
-### 获取结果
+### 7.6 获取结果
 
 | 方法 | 说明 | 是否阻塞 |
 |------|------|----------|
@@ -1472,9 +1475,9 @@ sequenceDiagram
 
 ---
 
-## 最佳实践
+## 8. 最佳实践
 
-### 1. 使用自定义线程池
+### 8.1 使用自定义线程池
 
 ```java
 // ❌ 不推荐：使用默认的 ForkJoinPool
@@ -1485,7 +1488,7 @@ ExecutorService executor = Executors.newFixedThreadPool(10);
 CompletableFuture.supplyAsync(() -> doWork(), executor);
 ```
 
-### 2. 合理选择阻塞和非阻塞调用
+### 8.2 合理选择阻塞和非阻塞调用
 
 **非阻塞场景**（推荐）：异步处理，不阻塞主线程
 
@@ -1531,7 +1534,7 @@ public String getFirstResult() {
 - 在需要同步结果的方法中可以使用 `join()` 阻塞等待
 - `allOf(...).join()` 后，各个 Future 的 `join()` 会立即返回，不会再次阻塞
 
-### 3. 合理使用异步和同步方法
+### 8.3 合理使用异步和同步方法
 
 ```java
 // 如果转换操作很快，使用同步方法
@@ -1545,7 +1548,7 @@ CompletableFuture<String> future = CompletableFuture
     .thenApplyAsync(data -> heavyProcess(data));  // 耗时操作，异步执行
 ```
 
-### 4. 异常处理要全面
+### 8.4 异常处理要全面
 
 ```java
 CompletableFuture<String> future = CompletableFuture
@@ -1564,7 +1567,7 @@ CompletableFuture<String> future = CompletableFuture
     });
 ```
 
-### 5. 避免嵌套的 CompletableFuture
+### 8.5 避免嵌套的 CompletableFuture
 
 ```java
 // ❌ 不推荐：嵌套的 Future
@@ -1581,7 +1584,7 @@ CompletableFuture<String> good =
         );
 ```
 
-### 6. 资源管理
+### 8.6 资源管理
 
 ```java
 ExecutorService executor = Executors.newFixedThreadPool(10);
@@ -1597,7 +1600,7 @@ try {
 
 ---
 
-## 总结
+## 9. 总结
 
 `CompletableFuture` 提供了强大的异步编程能力，通过链式调用可以实现复杂的任务编排。关键点：
 
