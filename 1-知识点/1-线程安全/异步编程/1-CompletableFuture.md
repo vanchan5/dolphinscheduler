@@ -515,6 +515,37 @@ flowchart TD
 
 这就是为什么在无依赖关系的场景下，并行执行能带来显著性能提升的原因。
 
+### 依赖流程图
+
+```mermaid
+flowchart TD
+    Start([开始]) --> T1[获取商品信息<br/>零依赖]
+    Start --> T2[获取商品图片<br/>零依赖]
+    Start --> T3[获取库存信息<br/>零依赖]
+    Start --> T4[获取评价信息<br/>零依赖]
+    Start --> T5[获取优惠券信息<br/>零依赖]
+    Start --> T6[获取推荐商品<br/>零依赖]
+    
+    T1 --> T7[汇总结果<br/>多元依赖]
+    T2 --> T7
+    T3 --> T7
+    T4 --> T7
+    T5 --> T7
+    T6 --> T7
+    
+    T7 --> End([结束])
+    
+    style Start fill:#E8F4F8
+    style T1 fill:#E8F4F8
+    style T2 fill:#E8F4F8
+    style T3 fill:#E8F4F8
+    style T4 fill:#E8F4F8
+    style T5 fill:#E8F4F8
+    style T6 fill:#E8F4F8
+    style T7 fill:#C5E1A5
+    style End fill:#C5E1A5
+```
+
 ### 实际案例：商品详情页基础数据获取
 
 ```java
@@ -563,39 +594,6 @@ public ProductDetailVO getProductDetail(Long productId) {
     
     return detailVO;
 }
-```
-
-### 执行流程图
-
-```mermaid
-graph TD
-    A[开始获取商品详情] --> B[并行异步执行]
-    
-    B --> C1[获取商品基本信息]
-    B --> C2[获取商品图片]
-    B --> C3[获取库存信息]
-    B --> C4[获取评价信息]
-    B --> C5[获取优惠券信息]
-    B --> C6[获取推荐商品]
-    
-    C1 --> D[等待所有任务完成]
-    C2 --> D
-    C3 --> D
-    C4 --> D
-    C5 --> D
-    C6 --> D
-    
-    D --> E[汇总结果]
-    E --> F[返回商品详情VO]
-    
-    style B fill:#E8F4F8
-    style C1 fill:#FFE5B4
-    style C2 fill:#FFE5B4
-    style C3 fill:#FFE5B4
-    style C4 fill:#FFE5B4
-    style C5 fill:#FFE5B4
-    style C6 fill:#FFE5B4
-    style D fill:#C5E1A5
 ```
 
 ### 执行时序图
@@ -705,6 +703,24 @@ public CompletableFuture<ProductDetailVO> getProductDetailAsync(Long productId) 
 
 **关键优势**：虽然不能并行，但可以异步，避免线程阻塞，提升系统并发能力。
 
+### 依赖流程图
+
+```mermaid
+flowchart TD
+    Start([开始]) --> T1[获取基础价格<br/>零依赖]
+    T1 --> T2[计算会员折扣<br/>一元依赖]
+    T2 --> T3[计算优惠券价格<br/>一元依赖]
+    T3 --> T4[计算最终价格<br/>一元依赖]
+    T4 --> End([结束])
+    
+    style Start fill:#E8F4F8
+    style T1 fill:#E8F4F8
+    style T2 fill:#FFE5B4
+    style T3 fill:#FFE5B4
+    style T4 fill:#FFE5B4
+    style End fill:#C5E1A5
+```
+
 ### 实际案例：商品价格计算流程
 
 ```java
@@ -749,20 +765,6 @@ public ProductPriceVO calculateFinalPrice(Long productId, Long userId) {
         })
         .join();  // 阻塞等待最终结果
 }
-```
-
-### 链式依赖流程图
-
-```mermaid
-flowchart LR
-    A[步骤1: 获取基础价格<br/>零依赖] --> B[步骤2: 计算会员折扣<br/>一元依赖]
-    B --> C[步骤3: 计算优惠券价格<br/>一元依赖]
-    C --> D[步骤4: 计算最终价格<br/>一元依赖]
-    
-    style A fill:#E8F4F8
-    style B fill:#FFE5B4
-    style C fill:#FFE5B4
-    style D fill:#FFE5B4
 ```
 
 ### 执行时序图
@@ -819,6 +821,25 @@ sequenceDiagram
 
 **关键优势**：充分利用了任务A和任务B无依赖关系的特点，通过并行执行显著减少等待时间。
 
+### 依赖流程图
+
+```mermaid
+flowchart TD
+    Start([开始]) --> T1[获取商品信息<br/>零依赖]
+    Start --> T2[获取用户画像<br/>零依赖]
+    
+    T1 --> T3[计算推荐<br/>二元依赖]
+    T2 --> T3
+    
+    T3 --> End([结束])
+    
+    style Start fill:#E8F4F8
+    style T1 fill:#E8F4F8
+    style T2 fill:#E8F4F8
+    style T3 fill:#FFB6C1
+    style End fill:#C5E1A5
+```
+
 ### 实际案例：商品推荐列表（依赖商品信息和用户信息）
 
 ```java
@@ -848,21 +869,6 @@ public List<ProductRecommend> getPersonalizedRecommend(Long productId, Long user
 }
 ```
 
-### 二元依赖流程图
-
-```mermaid
-graph TD
-    A[任务A: 获取商品信息<br/>零依赖] 
-    B[任务B: 获取用户画像<br/>零依赖]
-    
-    A --> C[任务C: 计算推荐<br/>二元依赖]
-    B --> C
-    
-    style A fill:#E8F4F8
-    style B fill:#E8F4F8
-    style C fill:#FFB6C1
-```
-
 ### 2.3 零依赖 -> 多元依赖 - 合并多个独立任务
 
 ### 场景描述
@@ -890,6 +896,31 @@ graph TD
 **性能提升 = (460 - 160) / 460 ≈ 65%**，响应时间缩短了 **2.88倍**！
 
 **关键优势**：多个无依赖关系的任务并行执行，最后统一汇总，充分利用多核CPU和网络IO，显著提升性能。
+
+### 依赖流程图
+
+```mermaid
+flowchart TD
+    Start([开始]) --> T1[商品信息<br/>零依赖]
+    Start --> T2[库存信息<br/>零依赖]
+    Start --> T3[评价信息<br/>零依赖]
+    Start --> T4[促销信息<br/>零依赖]
+    
+    T1 --> T5[组装详情<br/>多元依赖]
+    T2 --> T5
+    T3 --> T5
+    T4 --> T5
+    
+    T5 --> End([结束])
+    
+    style Start fill:#E8F4F8
+    style T1 fill:#E8F4F8
+    style T2 fill:#E8F4F8
+    style T3 fill:#E8F4F8
+    style T4 fill:#E8F4F8
+    style T5 fill:#FFB6C1
+    style End fill:#C5E1A5
+```
 
 ### 实际案例：商品详情页完整数据组装（依赖多个数据源）
 
@@ -935,32 +966,35 @@ public ProductDetailVO assembleProductDetail(Long productId) {
 }
 ```
 
-### 多元依赖流程图
-
-```mermaid
-graph TD
-    A[任务A: 商品信息<br/>零依赖]
-    B[任务B: 库存信息<br/>零依赖]
-    C[任务C: 评价信息<br/>零依赖]
-    D[任务D: 促销信息<br/>零依赖]
-    
-    A --> E[任务E: 组装详情<br/>多元依赖]
-    B --> E
-    C --> E
-    D --> E
-    
-    style A fill:#E8F4F8
-    style B fill:#E8F4F8
-    style C fill:#E8F4F8
-    style D fill:#E8F4F8
-    style E fill:#FFB6C1
-```
-
 ### 2.4 全部互相依赖 - 复杂的依赖关系
 
 ### 场景描述
 
 多个任务之间存在**复杂的互相依赖关系**，需要仔细设计执行顺序。
+
+### 依赖流程图
+
+```mermaid
+flowchart TD
+    Start([开始]) --> T1[验证库存<br/>零依赖]
+    
+    T1 --> T2[验证优惠券<br/>一元依赖]
+    T1 --> T3[计算价格<br/>二元依赖]
+    T2 --> T3
+    
+    T1 --> T4[创建订单<br/>多元依赖]
+    T2 --> T4
+    T3 --> T4
+    
+    T4 --> End([结束])
+    
+    style Start fill:#E8F4F8
+    style T1 fill:#E8F4F8
+    style T2 fill:#FFE5B4
+    style T3 fill:#FFB6C1
+    style T4 fill:#FF6B6B
+    style End fill:#C5E1A5
+```
 
 ### 实际案例：商品下单流程（多个步骤互相依赖）
 
@@ -1030,23 +1064,6 @@ public OrderVO createOrder(OrderRequest request) {
     
     return orderFuture.join();
 }
-```
-
-### 复杂依赖关系流程图
-
-```mermaid
-graph TD
-    A[步骤1: 验证库存<br/>零依赖] --> B[步骤2: 验证优惠券<br/>一元依赖]
-    A --> C[步骤3: 计算价格<br/>二元依赖]
-    B --> C
-    A --> D[步骤4: 创建订单<br/>多元依赖]
-    B --> D
-    C --> D
-    
-    style A fill:#E8F4F8
-    style B fill:#FFE5B4
-    style C fill:#FFB6C1
-    style D fill:#FF6B6B
 ```
 
 ### 复杂依赖关系时序图

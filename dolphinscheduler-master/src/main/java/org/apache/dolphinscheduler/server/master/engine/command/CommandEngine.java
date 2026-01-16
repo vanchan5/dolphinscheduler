@@ -154,8 +154,6 @@ public class CommandEngine extends BaseDaemonThread implements AutoCloseable {
                 List<CompletableFuture<Void>> allCompleteFutures = new ArrayList<>();
                 for (Command command : commands) {
                     CompletableFuture<Void> completableFuture = bootstrapCommand(command)
-                            .thenApply(s -> s)
-                            .thenCompose(s ->  CompletableFuture.supplyAsync(() -> s))
                             .thenAccept(this::bootstrapWorkflowExecutionRunnable)
                             .thenAccept((unused) -> bootstrapSuccess(command))
                             .exceptionally(throwable -> bootstrapError(command, throwable));
